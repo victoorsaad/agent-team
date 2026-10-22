@@ -2,28 +2,34 @@
   "name": "Fern & Kettle",
   "description": "A made-up two-person online tea shop (loose-leaf tea, a few teapots), used as the example team. Nothing here is a real business.",
   "language": "en",
-  "orchestrator": "lead",
+  "orchestrator": "ops",
+  "single_door": true,
   "reviewer": "reviewer",
   "human_message_max": 600,
   "playbook_file": "TEAM.md",
 
   "humans": [
-    {"id": "ana", "name": "Ana", "summary": "Owner. Decisions and approvals only.", "color": "#3d3a55"},
-    {"id": "leo", "name": "Leo", "summary": "Partner. Same as Ana: decisions and approvals.", "color": "#2f4a5c"}
+    {"id": "ana", "name": "Ana", "summary": "Owner. Talks to Ops; decisions and approvals only.", "color": "#3d3a55"},
+    {"id": "leo", "name": "Leo", "summary": "Partner. Same as Ana: either one can approve.", "color": "#2f4a5c"}
   ],
 
   "roles": [
-    {"id": "lead", "name": "Lead", "room": "lead", "color": "#f0a43a",
-     "summary": "Orchestrator: breaks work down, assigns it, chases what's stuck",
-     "prompt_file": "prompts/lead.md"},
+    {"id": "ops", "name": "Ops", "room": "lead", "color": "#eab308",
+     "summary": "Orchestrator: the owners' only contact. Routes every request, decides by the authority levels whether an owner is needed, tracks promises, closes each request with a receipt",
+     "prompt_file": "prompts/ops.md",
+     "allowed_tools": ["Read", "Glob", "Grep"]},
+    {"id": "retro", "name": "Retro", "room": "lead", "color": "#94a3b8",
+     "summary": "Weekly retro: audits how the team worked (receipts, promises, approvals, cost) and proposes up to 3 changes by PR",
+     "prompt_file": "prompts/retro.md",
+     "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(sqlite3 -readonly:*)", "Bash(git:*)", "Bash(gh:*)"]},
     {"id": "dev", "name": "Dev", "room": "back_left", "color": "#2fa7d8",
-     "summary": "The storefront code: pages, checkout, fixes",
+     "summary": "The storefront code: pages, checkout, fixes; picks up the backlog",
      "prompt_file": "prompts/dev.md",
      "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "Bash(gh:*)", "Bash(npm test:*)"]},
     {"id": "reviewer", "name": "Reviewer", "room": "back_left", "color": "#2fb37a",
-     "summary": "Reviews every pull request once and merges it when it's good",
+     "summary": "Reviews every pull request once (the merge gate merges what it passes)",
      "prompt_file": "prompts/reviewer.md",
-     "allowed_tools": ["Read", "Glob", "Grep", "Bash(git:*)", "Bash(gh:*)"]},
+     "allowed_tools": ["Read", "Glob", "Grep", "Bash(git:*)", "Bash(gh pr diff:*)", "Bash(gh pr view:*)"]},
     {"id": "marketing", "name": "Marketing", "room": "back_right", "color": "#f0675a",
      "summary": "Product pages, newsletter drafts, what to promote this week",
      "prompt_file": "prompts/marketing.md",
@@ -37,22 +43,54 @@
   "approvals": {
     "approvers": ["ana", "leo"],
     "rules": [
-      "Anything that leaves the shop: emails to customers or suppliers (always through propose_email), posts, ads.",
-      "Spending money: a new paid tool, ads, a supplier order.",
-      "Prices, discounts and refunds above the support policy in TEAM.md.",
-      "Merging a pull request that touches checkout, payments or prices.",
+      "Level 2 of the authority levels below, unless a standing decision (precedent) covers it.",
+      "Emails always go through propose_email: an owner's own \"approve\" sends them.",
       "Changing production outside a reviewed pull request."
     ]
   },
 
+  "authority": {
+    "levels": [
+      {"level": 0, "decides": "the agent", "heard": "the log and the office's Done today",
+       "examples": ["fixing a bug", "tests", "docs", "a reply draft within the support policy"]},
+      {"level": 1, "decides": "Ops", "heard": "one line in the 19:00 digest",
+       "examples": ["a PR that changes a page's copy or layout", "this week's promo pick", "priorities between teammates"]},
+      {"level": 2, "decides": "an owner, not urgent", "heard": "request_approval (Ops resolves the answer)",
+       "examples": ["money: ads, a new paid tool, a supplier order", "prices, discounts and refunds beyond the support policy",
+                    "checkout or payments code", "anything sent to customers outside the templates", "an owner's name in public"]},
+      {"level": 3, "decides": "an owner, now", "heard": "share with urgent",
+       "examples": ["a customer hurt right now", "checkout down", "a leaked key or odd access"]}
+    ],
+    "rules": [
+      "The teammate proposes the level and Ops checks it; when they differ, the higher one wins.",
+      "In doubt between two levels, the higher one, once: the owner's answer becomes a precedent (remember, precedent: true).",
+      "An owner's request approves what was asked, and only that. What a PR does beyond it follows the levels.",
+      "Trust ladder: after 10 approvals in a row without changes, Ops proposes moving that category down a level (an owner approves). One incident moves it back up at once."
+    ],
+    "locks": ["the authority levels", "the support policy's refund limit", "the mailer's daily cap", "access to production", "money rules"]
+  },
+
+  "decision_kinds": ["pr", "spend", "price", "other"],
+
+  "merge_gate": {
+    "sensitive_paths": ["^src/checkout/", "^src/lib/pricing", "payment"],
+    "method": "squash"
+  },
+
+  "digest": {"at": "19:00", "days": [0, 1, 2, 3, 4, 5]},
+
+  "promises": {"require": true, "chase_after_min": 120},
+
+  "retro": {"agent": "retro", "days": [0], "at": "08:30", "max_changes": 3, "notes_dir": "docs/retro"},
+
   "heartbeat": {
-    "agent": "lead", "every_min": 120,
-    "prompt": "Heartbeat ({now}). Look at the backlog (open issues and PRs, the team log). Assign the most valuable next steps, one clear task each, and chase anything stuck for more than a day. If nothing is worth doing, post_update \"nothing to move\" and stop."
+    "agent": "dev", "every_min": 120, "when": "backlog",
+    "prompt": "Backlog ({now}): {why}. Pick up what's yours or chase whoever has it (one clear task each). Don't merge: the gate does. If nothing needs action, post_update one line and stop."
   },
 
   "routines": [
-    {"name": "morning-check", "agent": "lead", "days": [0, 1, 2, 3, 4], "at": "07:30",
-     "prompt": "Morning check ({now}): run the tests on a clean checkout, list PRs open for more than a day. Share one short message only if something is wrong."},
+    {"name": "morning-check", "agent": "dev", "days": [0, 1, 2, 3, 4], "at": "07:30",
+     "prompt": "Morning check ({now}): run the tests on a clean checkout, list PRs open for more than a day. If something is wrong, fix it by PR or share it (urgent only if checkout is affected)."},
     {"name": "weekly-promo", "agent": "marketing", "days": [0], "at": "10:00",
      "prompt": "Weekly promo ({now}): pick one product to feature this week and draft the newsletter. Ask for approval with the draft; nothing goes out without it."}
   ],
@@ -60,10 +98,10 @@
   "triggers": [
     {"name": "new-support-tickets", "kind": "command", "agent": "support", "every_min": 30,
      "command": ["python3", "scripts/fake_tickets.py"],
-     "prompt": "New customer messages ({name}). Draft a reply for each and send the drafts to the humans in one request_approval:\n{items}"}
+     "prompt": "New customer messages ({name}). Draft a reply for each and send the drafts to the owners in one request_approval:\n{items}"}
   ],
 
   "office": {
-    "rooms": {"back_left": "Workshop", "back_right": "Marketing & Support", "lead": "Lead", "lounge": "Kitchen", "humans": "Owners"}
+    "rooms": {"back_left": "Workshop", "back_right": "Marketing & Support", "lead": "Ops & Retro", "lounge": "Kitchen", "humans": "Owners"}
   }
 }

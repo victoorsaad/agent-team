@@ -70,6 +70,7 @@
   .list { list-style: none; margin: 0; padding: 0; max-height: 270px; overflow-y: auto; }
   .list li { padding: 7px 0; border-bottom: 1px solid rgba(179,172,214,.15); }
   .list li:last-child { border-bottom: 0; }
+  .list a { color: var(--line); }
   .list .m { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; color: var(--muted); }
   .list .m b { color: var(--c); font: 600 13px var(--display); }
   .list .m time, .list .m .r { margin-left: auto; white-space: nowrap; }
@@ -128,6 +129,7 @@
   <div class="panel" id="feedbox">
     <div class="seg" role="tablist">
       <button type="button" role="tab" aria-selected="true" data-tab="msgs" data-t="convs"></button>
+      <button type="button" role="tab" aria-selected="false" data-tab="done" data-t="doneTab"></button>
       <button type="button" role="tab" aria-selected="false" data-tab="cost" data-t="costTab"></button>
     </div>
     <ul class="list" id="list"></ul>
@@ -156,7 +158,8 @@ import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer
 const TEAM = await fetch("/api/team", {cache: "no-store"}).then(r => r.json());
 const L = {
   en: {live: "live", offline: "offline", replay: "replay (scripted demo)", spin: "Auto-rotate", stop: "Stop rotating", center: "Center",
-       panel: "Panel", convs: "Conversations", costTab: "Cost per conversation", board: "Control panel", active: "Active agents",
+       panel: "Panel", convs: "Conversations", doneTab: "Done today", costTab: "Cost per conversation",
+       noDone: "Nothing recorded today yet.", proof: "proof", origin: {human: "asked by a human", routine: "routine", team: "initiative"}, board: "Control panel", active: "Active agents",
        queued: "Queued", runs: "Runs today", msgs: "Messages today", tokens: "Tokens today", cost: "Cost today", state: "State",
        costNote: "Cost = what these runs would cost on the API. On a subscription it isn't billed separately.",
        working: n => `${n} working`, of: (a, b) => `${a} of ${b}`, stopped: "stopped", pauseUntil: t => `paused until ${t}`, running: "running",
@@ -166,7 +169,8 @@ const L = {
        workingFor: d => `working for ${d}`, waitingN: n => `${n} waiting`, freeFor: d => `free for ${d}`, free: "free",
        runsToday: "runs today", tokensW: "tokens", lastFailed: "The last run failed or was interrupted.", close: "Close", human: "Human"},
   pt: {live: "ao vivo", offline: "sem conexão", replay: "replay (demonstração roteirizada)", spin: "Girar sozinho", stop: "Parar de girar", center: "Centralizar",
-       panel: "Painel", convs: "Conversas", costTab: "Custo por conversa", board: "Painel de controle", active: "Agentes ativos",
+       panel: "Painel", convs: "Conversas", doneTab: "Feito hoje", costTab: "Custo por conversa",
+       noDone: "Nada registrado hoje ainda.", proof: "prova", origin: {human: "a pedido", routine: "rotina", team: "iniciativa"}, board: "Painel de controle", active: "Agentes ativos",
        queued: "Com fila", runs: "Execuções hoje", msgs: "Mensagens hoje", tokens: "Tokens hoje", cost: "Custo hoje", state: "Estado",
        costNote: "Custo = o que essas execuções custariam pela API. Na assinatura, não é cobrado à parte.",
        working: n => `${n} trabalhando`, of: (a, b) => `${a} de ${b}`, stopped: "parado", pauseUntil: t => `pausa até ${t}`, running: "operando",
@@ -476,6 +480,9 @@ function drawList() {
   if (tab === "msgs") {
     ul.innerHTML = d.feed.map(m => `<li style="--c:${hex(m.from)}"><div class="m"><b>${esc(NAMES[m.from] || m.from)}</b><span>${T.to} ${esc(NAMES[m.to] || m.to)}</span><time>${ago(m.t, d.now)}</time></div><p>${esc(m.text)}</p></li>`).join("")
       || `<li><p class="hint">${T.noConvs}</p></li>`;
+  } else if (tab === "done") {
+    ul.innerHTML = (d.done || []).map(x => `<li style="--c:${hex(x.agent)}"><div class="m"><b>${esc(NAMES[x.agent] || x.agent)}</b><span>${esc(T.origin[x.origin] || x.origin)}</span><time>${ago(x.t, d.now)}</time></div><p>${esc(x.text)}${x.proof && /^https:\/\//.test(x.proof) ? ` · <a href="${esc(x.proof)}" target="_blank" rel="noopener">${T.proof}</a>` : x.proof ? ` · ${esc(x.proof)}` : ""}</p></li>`).join("")
+      || `<li><p class="hint">${T.noDone}</p></li>`;
   } else {
     ul.innerHTML = d.conversations.map(c => `<li style="--c:${hex(c.from)}"><div class="m"><b>${esc(NAMES[c.from] || TEAM.name)}</b><span>${esc(c.agents.map(a => NAMES[a] || a).join(", "))}</span><span class="r"><span class="cost">${usd(c.cost)}</span> · ${tok(c.tokens)}</span></div><p>${esc(c.subject)}</p></li>`).join("")
       || `<li><p class="hint">${T.noCost}</p></li>`;

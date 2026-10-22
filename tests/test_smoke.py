@@ -31,7 +31,9 @@ def fresh_db():
 class ConfigTest(unittest.TestCase):
     def test_example_loads(self):
         t = config.team()
-        self.assertEqual(t.orchestrator, "lead")
+        self.assertEqual(t.orchestrator, "ops")
+        self.assertTrue(t.single_door)
+        self.assertIn("Authority: who decides what", dispatcher.system_prompt("dev"))
         self.assertIn("ana", t.humans)
         self.assertTrue(t.role_prompt("dev"))
         self.assertIn("propose_email", dispatcher.system_prompt("dev"))
@@ -47,8 +49,8 @@ class ConfigTest(unittest.TestCase):
 class StoreTest(unittest.TestCase):
     def test_send_inbox_thread(self):
         c = fresh_db()
-        m1 = store.send(c, "ana", "lead", "task", "hello")
-        m2 = store.send(c, "lead", "dev", "task", "do it", thread=m1)
+        m1 = store.send(c, "ana", "ops", "task", "hello")
+        m2 = store.send(c, "ops", "dev", "task", "do it", thread=m1)
         self.assertEqual([r["id"] for r in store.inbox(c, "dev")], [m2])
         self.assertEqual(store.inbox(c, "dev"), [])
         self.assertEqual([r["id"] for r in store.thread(c, m1)], [m1, m2])
@@ -90,7 +92,7 @@ class McpTest(unittest.TestCase):
 
     def test_stdio_roundtrip(self):
         fresh_db()
-        out = self.rpc("lead",
+        out = self.rpc("ops",
                        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
                        {"jsonrpc": "2.0", "method": "notifications/initialized"},
                        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
@@ -98,14 +100,15 @@ class McpTest(unittest.TestCase):
                        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "share", "arguments": {"text": "x" * 700}}})
         self.assertEqual([o["id"] for o in out], [1, 2, 3, 4])
         names = {t["name"] for t in out[1]["result"]["tools"]}
-        self.assertTrue({"ask", "assign", "reply", "inbox", "request_approval", "remember"} <= names)
+        self.assertTrue({"ask", "assign", "reply", "inbox", "request_approval", "remember", "commit", "decide"} <= names)
+        self.assertNotIn("review", names)   # the reviewer's, and only with GitHub on
         self.assertNotIn("propose_email", names)   # the mailer is off by default
         self.assertIn("Sent", out[2]["result"]["content"][0]["text"])
         self.assertTrue(out[3]["result"]["isError"])   # too long for a human
         self.assertEqual(store.db().execute("SELECT count(*) FROM messages WHERE recipient = 'dev'").fetchone()[0], 1)
 
     def test_remember(self):
-        mcp_server.ME = "lead"
+        mcp_server.ME = "ops"
         os.environ["TEAM_MEMORY_FILE"] = os.path.join(TMP, "MEMORY.md")
         mcp_server.call("remember", {"decision": "Free shipping above 50", "who": "ana"})
         self.assertIn("Free shipping above 50", dispatcher.memory())
@@ -114,15 +117,16 @@ class McpTest(unittest.TestCase):
 class DispatcherTest(unittest.TestCase):
     def test_dry_run_tick(self):
         c = fresh_db()
-        m = store.send(c, "ana", "lead", "ask", "status?")
+        m = store.send(c, "ana", "ops", "ask", "status?")
         dispatcher.tick(c)
         for th in list(dispatcher.running.values()):
             th.join(10)
         reply = c.execute("SELECT * FROM messages WHERE reply_to = ?", (m,)).fetchone()
         self.assertIsNotNone(reply)
         self.assertEqual(reply["recipient"], "ana")
-        run = c.execute("SELECT * FROM runs WHERE agent = 'lead'").fetchone()
+        run = c.execute("SELECT * FROM runs WHERE agent = 'ops'").fetchone()
         self.assertEqual(run["ok"], 1)
+        self.assertEqual(run["origin"], "human")
 
     def test_command_and_mcp_config(self):
         fresh_db()

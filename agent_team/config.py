@@ -4,6 +4,7 @@ Everything that changes from one team to another lives in team.json and the prom
 changes from one machine to another (paths, ports, tokens) lives in the environment. See .env.example."""
 import json
 import os
+import re
 
 PKG = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(PKG)
@@ -70,7 +71,10 @@ class ConfigError(ValueError):
 
 
 class Team:
-    """The team: roles (agents), humans, who approves what, routines and triggers."""
+    """The team: roles (agents), humans, who approves what, routines and triggers. Optional, each off unless its key is
+    in team.json: single_door (every human message goes to the orchestrator), authority (levels 0-3), digest (non-urgent
+    shares batched into one daily message), promises, merge_gate (the dispatcher merges what the reviewer passed) and
+    retro (a weekly audit of how the team worked)."""
 
     def __init__(self, path=None):
         self.path = os.path.abspath(path or setting("TEAM_CONFIG", DEFAULT_CONFIG))
@@ -91,6 +95,13 @@ class Team:
         self.routines = raw.get("routines", [])
         self.triggers = raw.get("triggers", [])
         self.office = raw.get("office", {})
+        self.single_door = bool(raw.get("single_door"))
+        self.authority = raw.get("authority") or {}
+        self.digest = raw.get("digest")
+        self.promises = raw.get("promises") or {}
+        self.merge_gate = raw.get("merge_gate")
+        self.retro = raw.get("retro")
+        self.decision_kinds = raw.get("decision_kinds") or ["pr", "spend", "legal", "other"]
         self.validate()
 
     # ---- lookups -------------------------------------------------------------------------------------------------
@@ -142,6 +153,32 @@ class Team:
     def approvers(self):
         return self.approvals.get("approvers") or list(self.humans)
 
+    def authority_table(self):
+        """team.json → authority.levels as a markdown table for the prompts. Empty when there's no authority block."""
+        levels = self.authority.get("levels") or []
+        if not levels:
+            return ""
+        rows = ["| Level | Who decides | How the humans hear of it | Examples |", "|---|---|---|---|"]
+        for lv in levels:
+            rows.append("| %s | %s | %s | %s |" % (lv.get("level", ""), lv.get("decides", ""), lv.get("heard", ""),
+                                                   "; ".join(lv.get("examples") or [])))
+        rules = "\n".join("- " + r for r in self.authority.get("rules") or [])
+        return "\n".join(rows) + ("\n\n" + rules if rules else "")
+
+    def locks(self):
+        """What no agent changes, the retro included, without a human: authority.locks."""
+        return self.authority.get("locks") or ["the authority levels", "send limits", "access to production", "money rules"]
+
+    def gate_paths(self):
+        """merge_gate.sensitive_paths as one regex (None when there are none): a PR touching them needs a human's yes."""
+        pats = (self.merge_gate or {}).get("sensitive_paths") or []
+        return re.compile("|".join("(?:%s)" % p for p in pats), re.I) if pats else None
+
+    def at(self, block):
+        """(hour, minute) of a block's "at" ("19:00")."""
+        h, m = (int(x) for x in (block or {}).get("at", "19:00").split(":"))
+        return h, m
+
     def public(self):
         """What the office screen needs (no prompts)."""
         return {
@@ -168,6 +205,22 @@ class Team:
             raise ConfigError("orchestrator %r is not a role" % self.orchestrator)
         if self.reviewer and self.reviewer not in self.roles:
             raise ConfigError("reviewer %r is not a role" % self.reviewer)
+        if self.single_door and not self.raw.get("orchestrator"):
+            raise ConfigError("single_door needs an explicit orchestrator")
+        if self.merge_gate is not None and not self.reviewer:
+            raise ConfigError("merge_gate needs a reviewer (the gate merges what the reviewer passed)")
+        if self.retro and self.retro.get("agent") not in self.roles:
+            raise ConfigError("retro points to unknown agent %r" % self.retro.get("agent"))
+        for key, block in (("digest", self.digest), ("retro", self.retro)):
+            if block and not re.fullmatch(r"\d{1,2}:\d{2}", str(block.get("at", "19:00"))):
+                raise ConfigError("%s.at must look like \"19:00\"" % key)
+        for p in (self.merge_gate or {}).get("sensitive_paths") or []:
+            try:
+                re.compile(p)
+            except re.error as e:
+                raise ConfigError("merge_gate.sensitive_paths: bad pattern %r (%s)" % (p, e))
+        if self.heartbeat and self.heartbeat.get("when", "always") not in ("always", "backlog"):
+            raise ConfigError("heartbeat.when must be 'always' or 'backlog'")
         for a in self.approvers():
             if a not in self.humans:
                 raise ConfigError("approver %r is not a human" % a)

@@ -1,6 +1,11 @@
 """Wakes the team up. Every few seconds, anyone with unread mail gets a headless Claude Code run (`claude -p`) to work
-through one conversation. The orchestrator gets a heartbeat every so often in the daytime; routines and triggers from
-team.json give the team work of its own.
+through one conversation. The heartbeat agent gets a heartbeat every so often in the daytime (or, with "when":
+"backlog", only when a PR sits open for more than a day or a new issue appears); routines and triggers from team.json
+give the team work of its own.
+
+Mechanical work is code here, not an agent run: the merge gate merges what the reviewer passed, promises wake their
+agent when their dependency closes or they fall due, the daily digest is assembled from the tables, and the weekly
+retro gets its task with the data it should read.
 
 Limits so the team never runs away: a few runs at once (plus one slot kept for conversations a human started), a daily
 cap per agent for the team's own work, a daily cap on self-started tasks, a timeout per run, and a pause when the
@@ -37,6 +42,22 @@ Need a teammate? `ask` or `assign` and keep going; never wait or poll, you'll be
 Anything in the approval rules: `request_approval` first and stop there.
 Before you finish, `post_update` one line for the log. Use `share` only if a human would want to know."""
 
+# Added to RUN_PROMPT by the optional features in team.json.
+PROMPT_DOOR = """
+The humans talk only to {orchestrator}: answer whoever asked you (usually {orchestrator}), not the humans."""
+PROMPT_PROMISES = """
+Anything you'll do after this run ends ("after the deploy", "this afternoon", "once the PR is in"): register it with
+`commit` (what, due, depends) before you finish; you're woken for it, and you close it with `commit_done` + proof."""
+PROMPT_DIGEST = """
+`share` lands in the daily digest; `urgent` only for what can't wait."""
+
+
+def run_prompt(agent):
+    t = config.team()
+    extra = (PROMPT_DOOR.format(orchestrator=t.orchestrator) if t.single_door and agent != t.orchestrator else "") \
+        + (PROMPT_PROMISES if t.promises.get("require", t.single_door) else "") + (PROMPT_DIGEST if t.digest else "")
+    return RUN_PROMPT.format(agent=agent, team=t.name) + extra
+
 
 def settings():
     return {
@@ -51,13 +72,17 @@ def settings():
 
 
 def system_prompt(agent):
-    """Role prompt + how the team works + approval rules + the team's standing decisions."""
+    """Role prompt + how the team works + approval rules (+ authority levels) + the team's standing decisions."""
     t = config.team()
     who = "\n".join("- %s (%s): %s" % (m, "human" if t.is_human(m) else "agent", t.summary(m)) for m in t.members)
     parts = [
         "# Your role: %s\n\n%s" % (t.display(agent), t.role_prompt(agent).strip()),
         "# The team (%s)\n%s\n%s" % (t.name, t.description, who),
         "# What needs a human (request_approval, then stop)\n%s" % (t.approval_rules() or "- Anything you are not sure about."),
+    ]
+    if t.authority_table():
+        parts.append("# Authority: who decides what\n%s" % t.authority_table())
+    parts += [
         "# Language\nWrite to the humans in %s. Keep it short: they read every message addressed to them." % (
             {"pt": "Portuguese", "en": "English", "es": "Spanish"}.get(t.language, t.language)),
     ]
@@ -131,7 +156,9 @@ def describe(block):
         tool = name.split("__")[-1]
         to = i.get("to") or ""
         return {"ask": "asks %s" % to, "assign": "assigns %s" % to, "reply": "replies", "inbox": "opens the inbox",
-                "request_approval": "asks for approval", "share": "tells the humans", "post_update": "logs progress"}.get(tool, tool)
+                "request_approval": "asks for approval", "share": "tells the humans", "post_update": "logs progress",
+                "commit": "makes a promise", "commit_done": "keeps a promise", "decide": "records a decision",
+                "review": "reviews a PR"}.get(tool, tool)
     if name.startswith("mcp__"):
         return name.split("__", 1)[1].replace("__", ": ").replace("_", " ")
     if name in ("WebSearch", "WebFetch"):
@@ -165,10 +192,10 @@ def dry_run(c, rid, agent):
     return True, "dry run: %d message(s)" % len(rows), None
 
 
-def run(agent, prompt):
+def run(agent, prompt, origin=None):
     s = settings()
     c = store.db()
-    rid = c.execute("INSERT INTO runs (agent, started_at) VALUES (?, ?)", (agent, time.time())).lastrowid
+    rid = c.execute("INSERT INTO runs (agent, started_at, origin) VALUES (?, ?, ?)", (agent, time.time(), origin)).lastrowid
     c.execute("DELETE FROM activity WHERE ts < ?", (time.time() - 3 * 86400,))
     ok, note, res, tail = False, "", None, []
     try:
@@ -219,12 +246,12 @@ def run(agent, prompt):
         running.pop(agent, None)
 
 
-def start(agent, prompt, human=False):
+def start(agent, prompt, human=False, origin=None):
     s = settings()
     with lock:
         if agent in running or len(running) >= s["parallel"] + (s["human_slots"] if human else 0):
             return False
-        th = threading.Thread(target=run, args=(agent, prompt), daemon=True)
+        th = threading.Thread(target=run, args=(agent, prompt, origin), daemon=True)
         running[agent] = th
     th.start()
     return True
@@ -260,7 +287,9 @@ def tick(c):
                 store.state(c, key, 1)
                 notify.say("%s hit today's %d runs; the team's own work waits for tomorrow (TEAM_DAILY_RUNS)." % (agent, s["daily_runs"]))
             continue
-        start(agent, RUN_PROMPT.format(agent=agent, team=t.name), human=bool(r["human"]))
+        first = c.execute("SELECT sender FROM messages WHERE id = ?", (r["first"],)).fetchone()
+        origin = "human" if r["human"] else ("routine" if first and first["sender"] == "system" else "team")
+        start(agent, run_prompt(agent), human=bool(r["human"]), origin=origin)
     hb = t.heartbeat
     if hb:
         now = dt.datetime.now()
@@ -268,7 +297,9 @@ def tick(c):
         if s["awake"][0] <= now.hour < s["awake"][1] and time.time() - last >= int(hb.get("every_min", 120)) * 60 \
                 and hb["agent"] not in running:
             store.state(c, "heartbeat_at", time.time())
-            store.send(c, "system", hb["agent"], "task", hb["prompt"].format(now=now.strftime("%Y-%m-%d %H:%M")))
+            why = backlog_news(last) if hb.get("when") == "backlog" else ""
+            if why is not None:   # "backlog": only when there's something; nothing to move is not worth a run
+                store.send(c, "system", hb["agent"], "task", hb["prompt"].format(now=now.strftime("%Y-%m-%d %H:%M"), why=why))
 
 
 def proactive(c, agent, text, always=False):
@@ -365,6 +396,14 @@ def triggers(c):
 
 # ---- optional: GitHub pull requests (TEAM_GITHUB=1, needs `gh` logged in) ------------------------------------------
 
+GATE_REVIEW_TASK = """PR #{n} ({title}) finished CI: {result}. You review; the merge gate merges.
+- CI failed: find who opened it (team_log, the branch name), `assign` them the fix with the failing log, then stop.
+- Green: read the diff (`gh pr diff {n}`), at the depth the risk asks. Then one `review`:
+  a real bug → `review` block + `assign` the author a numbered list with file:line;
+  fine, but a change the authority levels give to a human and none asked for it in this conversation → `review` ok
+  with needs_human and two lines in `what`;
+  fine otherwise → `review` ok. Don't merge and don't tell the humans: the gate merges and posts the receipt."""
+
 REVIEW_TASK = """PR #{n} ({title}) finished CI: {result}. You review and merge; no PR stays open.
 - CI failed: find who opened it (team_log, the branch name), `assign` them the fix with the failing log, then stop.
 - Green: read the diff (`gh pr diff {n}`). A real bug: `assign` the author a numbered list with file:line, stop.
@@ -432,8 +471,286 @@ def pr_queue(c):
                        ("%%/pull/%d%%" % n, "%%PR #%d%%" % n)).fetchone()
         store.state(c, key, pr["headRefOid"])
         store.send(c, "system", t.reviewer, "task",
-                   REVIEW_TASK.format(n=n, title=pr["title"], result="failed: " + ", ".join(failed) if failed else "green"),
+                   (GATE_REVIEW_TASK if t.merge_gate is not None else REVIEW_TASK).format(n=n, title=pr["title"], result="failed: " + ", ".join(failed) if failed else "green"),
                    thread=th["thread"] if th else None)
+
+
+def gh_json(*args):
+    out = gh(*args)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr[:200])
+    return json.loads(out.stdout or "null")
+
+
+def iso_ts(v):
+    return dt.datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+
+
+def backlog_news(since):
+    """Why the heartbeat agent should look at the backlog now (heartbeat "when": "backlog"), or None: a ready PR open
+    for more than a day, or an issue opened since the last look. Needs TEAM_GITHUB; without it there's never news."""
+    if not config.flag("TEAM_GITHUB"):
+        return None
+    try:
+        prs = gh_json("pr", "list", "--state", "open", "--json", "number,isDraft,createdAt")
+        issues = gh_json("issue", "list", "--state", "open", "--json", "number,createdAt")
+    except Exception as e:  # noqa: BLE001
+        print("backlog", repr(e)[:200], flush=True)
+        return None
+    stale = [p["number"] for p in prs if not p["isDraft"] and time.time() - iso_ts(p["createdAt"]) > 86400]
+    new = [i["number"] for i in issues if iso_ts(i["createdAt"]) > since]
+    parts = (["PR open for more than a day: " + ", ".join("#%d" % n for n in stale)] if stale else []) + \
+            (["new issue: " + ", ".join("#%d" % n for n in new)] if new else [])
+    return "; ".join(parts) or None
+
+
+# ---- the merge gate (team.json merge_gate, TEAM_GITHUB=1) ----------------------------------------------------------
+
+def gate(pr, verdict, decisions, sensitive=None, require_ci=True):
+    """What the merge gate does with one reviewed PR: ("drop" | "wait" | "ask" | "merge", why). Pure, so it's tested.
+    pr: `gh pr view --json state,isDraft,headRefOid,files,mergeable,statusCheckRollup`; verdict: the reviewer's
+    {"head", "verdict", "at"}; decisions: this PR's rows in `decisions`; sensitive: the regex of paths that need a
+    human's yes even when the reviewer didn't ask for one."""
+    if pr["state"] != "OPEN" or pr["headRefOid"] != verdict["head"]:
+        return "drop", "merged, closed or pushed again since the review (the reviewer gets it again)"
+    if verdict["verdict"] != "ok":
+        return "wait", "the reviewer blocked it"
+    if pr.get("isDraft"):
+        return "wait", "draft"
+    if pr.get("mergeable") == "CONFLICTING":
+        return "wait", "conflicts with the base branch"
+    checks = pr.get("statusCheckRollup") or []
+    if any((x.get("status") or "COMPLETED") != "COMPLETED" for x in checks) or (require_ci and not checks):
+        return "wait", "CI hasn't finished on this commit"
+    failed = [x.get("name") or "?" for x in checks if (x.get("conclusion") or "SUCCESS") not in ("SUCCESS", "SKIPPED", "NEUTRAL")]
+    if failed:
+        return "wait", "CI failed: " + ", ".join(failed)
+    for d in decisions:
+        if d["status"] == "pending":
+            return "wait", "decision %d waits for a human" % d["id"]
+        if d["status"] == "rejected" and (d["decided_at"] or 0) > verdict["at"]:
+            return "wait", "a human rejected it (decision %d)" % d["id"]
+    touchy = [f["path"] for f in pr.get("files") or [] if sensitive and sensitive.search(f["path"])]
+    if touchy and not any(d["status"] == "approved" for d in decisions):
+        return "ask", ", ".join(touchy[:4])
+    return "merge", ""
+
+
+def receipt_from():
+    t = config.team()
+    return t.orchestrator if t.single_door else t.reviewer
+
+
+def merge_gate(c):
+    """Merges what the reviewer passed (`review` ok), at most one a minute, never around a pending or rejected decision,
+    and asks a human first for sensitive paths. A PR from a human's conversation gets a one-line receipt there."""
+    t = config.team()
+    g = t.merge_gate
+    if g is None or not t.reviewer or time.time() - float(store.state(c, "gate_at") or 0) < 60:
+        return
+    store.state(c, "gate_at", time.time())
+    for row in c.execute("SELECT k, v FROM state WHERE k LIKE 'verdict:%'").fetchall():
+        n, rv = int(row["k"].split(":")[1]), json.loads(row["v"])
+        info = gh_json("pr", "view", str(n), "--json", "state,isDraft,headRefOid,title,url,files,mergeable,statusCheckRollup")
+        ref = "pr:%d" % n
+        decisions = [dict(d) for d in c.execute("SELECT * FROM decisions WHERE ref = ?", (ref,))]
+        what, why = gate(info, rv, decisions, t.gate_paths(), g.get("require_ci", True))
+        if what == "drop":
+            c.execute("DELETE FROM state WHERE k = ?", (row["k"],))
+            continue
+        if what == "ask":
+            store.open_decision(c, receipt_from(), "pr", LABELS[lang()]["gate_ask"] % (n, info["title"], why, info.get("url", "")),
+                                thread=rv.get("thread"), ref=ref, owner=t.reviewer)
+            continue
+        if what != "merge":
+            continue
+        if g.get("deploy_workflow"):
+            deploy = gh_json("run", "list", "--workflow", g["deploy_workflow"], "--limit", "1", "--json", "status")
+            if deploy and deploy[0]["status"] != "completed":
+                return
+        out = gh("pr", "merge", str(n), "--%s" % g.get("method", "squash"), "--delete-branch")
+        if out.returncode != 0:
+            print("gate merge", n, out.stderr[:200], flush=True)
+            continue
+        c.execute("DELETE FROM state WHERE k = ?", (row["k"],))
+        th = rv.get("thread")
+        store.did(c, t.reviewer, "PR #%d merged: %s" % (n, info["title"]), proof=info.get("url"), thread=th)
+        root = th and c.execute("SELECT sender FROM messages WHERE id = ?", (th,)).fetchone()
+        if root and t.is_human(root["sender"]):
+            store.send(c, receipt_from(), root["sender"], "update", LABELS[lang()]["merged"] % (n, info["title"]), thread=th)
+        print("gate merged", n, flush=True)
+        return   # one per minute: each merge may deploy
+
+
+# ---- promises (`commit`) -------------------------------------------------------------------------------------------
+
+PROMISE_TASK = """Promise {id}: {what}
+{news} Do it now and close it with `commit_done` (with the proof) or `commit_failed` (why, and what happens instead);
+then answer whoever asked, in this conversation."""
+
+
+def dep_news(c, dep, cache):
+    """What happened to a promise's dependency, or None while it's still open."""
+    kind, ref = dep.split(":")
+    if kind == "decision":
+        d = c.execute("SELECT status FROM decisions WHERE id = ?", (int(ref),)).fetchone()
+        return "Decision %s was %s." % (ref, d["status"]) if d and d["status"] != "pending" else None
+    if not config.flag("TEAM_GITHUB"):
+        return None
+    if dep not in cache:
+        pr = gh_json("pr", "view", ref, "--json", "state")
+        cache[dep] = {"MERGED": "PR #%s was merged." % ref, "CLOSED": "PR #%s was closed without merging." % ref}.get(pr["state"])
+    return cache[dep]
+
+
+def promises(c, now=None):
+    """Wake the agent when the dependency closes or at the due time, whichever comes first; an open promise past due by
+    promises.chase_after_min (default 120) wakes the orchestrator, once."""
+    if now is None:
+        if time.time() - float(store.state(c, "promises_at") or 0) < 60:
+            return
+        store.state(c, "promises_at", time.time())
+    t, now, cache = config.team(), now or time.time(), {}
+    chase = int(t.promises.get("chase_after_min", 120)) * 60
+    for p in c.execute("SELECT * FROM promises WHERE status = 'open' ORDER BY id").fetchall():
+        if not p["woke_at"]:
+            try:
+                news = dep_news(c, p["depends"], cache) if p["depends"] else None
+            except Exception as e:  # noqa: BLE001
+                print("promise dep", p["id"], repr(e)[:200], flush=True)
+                continue
+            if news is None and now >= p["due"]:
+                news = "It's the time you set%s." % (" (%s still open)" % p["depends"] if p["depends"] else "")
+            if news:
+                c.execute("UPDATE promises SET woke_at = ? WHERE id = ?", (now, p["id"]))
+                store.send(c, "system", p["agent"], "task", PROMISE_TASK.format(id=p["id"], what=p["what"], news=news), thread=p["thread"])
+        elif not p["chased_at"] and now >= max(p["due"], p["woke_at"]) + chase and p["agent"] != t.orchestrator:
+            c.execute("UPDATE promises SET chased_at = ? WHERE id = ?", (now, p["id"]))
+            store.send(c, "system", t.orchestrator, "task", "Promise %d by %s is overdue and still open: %s. Chase the owner once or "
+                       "reassign it; if a human asked for it, give them the honest receipt (\"couldn't + why\") in the conversation."
+                       % (p["id"], p["agent"], p["what"]), thread=p["thread"])
+
+
+# ---- the daily digest (team.json digest) ---------------------------------------------------------------------------
+
+LABELS = {
+    "en": {"today": "Today · %s", "done": "Done (%d):", "more": " and %d more", "found": "The team found:",
+           "decided": "Decided today:", "waiting": "Waiting for you:", "since": "for %s", "mails": "%d email(s) to approve",
+           "promises": "Open promises (%d, %d late):", "until": "due %s",
+           "footer": "%d requests from you · %d promises kept · %d runs, ~US$ %.2f",
+           "merged": "Done: PR #%d merged (%s).", "gate_ask": "PR #%d (%s) touches %s, so it needs a human's yes before it goes in. The reviewer passed it.\n%s"},
+    "pt": {"today": "Hoje · %s", "done": "Feito (%d):", "more": " e mais %d", "found": "O time achou:",
+           "decided": "Decidido hoje:", "waiting": "Esperando vocês:", "since": "há %s", "mails": "%d e-mail(s) para aprovar",
+           "promises": "Promessas abertas (%d, %d atrasadas):", "until": "até %s",
+           "footer": "%d pedidos de vocês · %d promessas cumpridas · %d execuções, ~US$ %.2f",
+           "merged": "Feito: PR #%d mergeado (%s).", "gate_ask": "O PR #%d (%s) mexe em %s, então precisa do sim de uma pessoa antes de entrar. O revisor aprovou.\n%s"},
+}
+
+
+def lang():
+    return config.team().language if config.team().language in LABELS else "en"
+
+
+def digest_text(c, now=None):
+    """The day in one message, assembled from the tables (no agent run): what got done, what the team found (the
+    shares that weren't urgent), what was decided, what waits for the humans, open promises, the cost. None when the
+    day had nothing at all."""
+    t, L = config.team(), LABELS[lang()]
+    now = now or time.time()
+    day = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+    clip = lambda x, n=110: (lambda y: y if len(y) <= n else y[:n - 1] + "…")(" ".join((x or "").split()))   # noqa: E731
+    age = lambda ts: "%dh" % ((now - ts) // 3600) if now - ts < 2 * 86400 else "%dd" % ((now - ts) // 86400)   # noqa: E731
+    humans = list(t.humans)
+    q = ",".join("?" * len(humans))
+    done = c.execute("SELECT * FROM done WHERE ts >= ? AND agent NOT IN (%s) ORDER BY id" % q, [day] + humans).fetchall()
+    shares = c.execute("SELECT sender, body FROM messages WHERE kind = 'share' AND created_at >= ? ORDER BY id", (day,)).fetchall()
+    decided = c.execute("SELECT * FROM decisions WHERE decided_at >= ? ORDER BY id", (day,)).fetchall()
+    waiting = c.execute("SELECT * FROM decisions WHERE status = 'pending' ORDER BY id").fetchall()
+    mails = c.execute("SELECT count(*) FROM outbox WHERE status = 'pending'").fetchone()[0]
+    open_p = c.execute("SELECT * FROM promises WHERE status = 'open' ORDER BY due").fetchall()
+    kept = c.execute("SELECT count(*) FROM promises WHERE status = 'done' AND closed_at >= ?", (day,)).fetchone()[0]
+    asked = c.execute("SELECT count(*) FROM messages WHERE sender IN (%s) AND created_at >= ?" % q, humans + [day]).fetchone()[0]
+    runs = c.execute("SELECT count(*), coalesce(sum(cost_usd), 0) FROM runs WHERE started_at >= ? AND started_at <= ?", (day, now)).fetchone()
+    if not (done or shares or decided or waiting or mails or open_p or asked or runs[0]):
+        return None
+    lines = ["**%s**" % (L["today"] % time.strftime("%d/%m", time.localtime(now)))]
+    if done:
+        lines.append("**%s** %s" % (L["done"] % len(done), "; ".join("%s: %s" % (t.display(d["agent"]), clip(d["text"], 70)) for d in done[:6])
+                                   + (L["more"] % (len(done) - 6) if len(done) > 6 else "")))
+    if shares:
+        lines.append("**%s**\n" % L["found"] + "\n".join("· %s: %s" % (t.display(r["sender"]), clip(r["body"])) for r in shares[:8]))
+    if decided:
+        lines.append("**%s** " % L["decided"] + "; ".join("%s %s (%s)" % ({"approved": "✅", "rejected": "❌"}.get(d["status"], "·"),
+                                                                      clip(d["what"], 60), t.display(d["decided_by"] or "")) for d in decided[:6]))
+    if waiting or mails:
+        lines.append("**%s**\n" % L["waiting"] + "\n".join(["· %s (%s)" % (clip(d["what"], 90), L["since"] % age(d["created_at"])) for d in waiting[:6]]
+                                                            + (["· " + L["mails"] % mails] if mails else [])))
+    if open_p:
+        late = [p for p in open_p if p["due"] < now]
+        lines.append("**%s**\n" % (L["promises"] % (len(open_p), len(late))) + "\n".join(
+            "· %s%s: %s (%s)" % ("⚠️ " if p["due"] < now else "", t.display(p["agent"]), clip(p["what"], 80),
+                                L["until"] % time.strftime("%d/%m %H:%M", time.localtime(p["due"]))) for p in open_p[:6]))
+    lines.append(L["footer"] % (asked, kept, runs[0], runs[1]))
+    return "\n".join(lines)[:int((t.digest or {}).get("max_chars", 3800))]
+
+
+def digest(c):
+    """team.json digest: {"at": "19:00", "days": [0..6]}. Once a day, within 3 h of `at`, from the orchestrator."""
+    t = config.team()
+    if not t.digest:
+        return
+    now = dt.datetime.now()
+    hour, minute = t.at(t.digest)
+    key = "digest:%s" % now.date()
+    if now.weekday() not in t.digest.get("days", range(7)) or (now.hour, now.minute) < (hour, minute) or now.hour >= hour + 3 \
+            or store.state(c, key):
+        return
+    store.state(c, key, 1)
+    text = digest_text(c)
+    if text:
+        store.send(c, t.orchestrator, t.primary_human, "digest", text, mirror=False)
+        notify.say(text, who=t.display(t.orchestrator))
+
+
+# ---- the weekly retro (team.json retro) ----------------------------------------------------------------------------
+
+RETRO_TASK = """Weekly retro ({now}). You audit how the team worked in the last 7 days, {orchestrator} included, and
+propose at most {max} changes. Read the playbook first, and last week's retro in {notes}/.
+Data, read-only: the team's database (`sqlite3 -readonly {db}`): runs (agent, origin, cost_usd, note), messages
+(kind, sender, recipient, thread), decisions, promises, done, outbox{gh}.
+Measure, with numbers and two or three examples each (message or run ids): human requests without a receipt;
+promises overdue or closed without proof; messages that promise something later without a promise; decisions that
+repeat (candidates for a precedent) and categories approved {streak} times in a row without changes (candidates to move
+down a level); requests for approval per day; empty or repeated runs; cost per agent and per result; broken rules.
+Check whether last week's changes moved the metric they promised; revert by PR what didn't.
+Deliver {notes}/YYYY-MM-DD.md (numbers, what got better, what got worse, the changes) and at most {max} PRs, one per
+change, in the role prompts or the playbook, each with the metric it should move.
+Never change: {locks}. Every PR of yours waits for a human: `request_approval` kind pr with the number and two lines.
+End with one `share` of three lines."""
+
+
+def retro_task(now):
+    t = config.team()
+    r = t.retro or {}
+    return RETRO_TASK.format(now=now.strftime("%Y-%m-%d %H:%M"), orchestrator=t.orchestrator, max=int(r.get("max_changes", 3)),
+                             notes=r.get("notes_dir", "docs/retro"), db=config.db_path(), streak=int(r.get("streak", 10)),
+                             gh="; and `gh pr list --state merged`" if config.flag("TEAM_GITHUB") else "",
+                             locks=", ".join(t.locks()))
+
+
+def retro(c):
+    """team.json retro: {"agent", "days": [0], "at": "08:30"}. Never skipped for the daily cap (it's weekly)."""
+    t = config.team()
+    r = t.retro
+    if not r:
+        return
+    now = dt.datetime.now()
+    hour, minute = t.at(dict(r, at=r.get("at", "08:30")))
+    key = "retro:%s" % now.date()
+    if now.weekday() not in r.get("days", [0]) or (now.hour, now.minute) < (hour, minute) or now.hour >= hour + 3 or store.state(c, key):
+        return
+    store.state(c, key, 1)
+    proactive(c, r["agent"], retro_task(now), always=True)
 
 
 def weekly(c):
@@ -461,7 +778,7 @@ def main():
                   (time.time(),)).rowcount
     s = settings()
     print("dispatcher up for %s (%d agents%s); closed %d interrupted run(s)" % (t.name, len(t.roles), ", DRY RUN" if s["dry"] else "", n), flush=True)
-    jobs = [routines, triggers] + ([pr_watches, pr_queue] if config.flag("TEAM_GITHUB") else [])
+    jobs = [routines, retro, triggers, promises, digest] + ([pr_watches, pr_queue, merge_gate] if config.flag("TEAM_GITHUB") else [])
     once = config.flag("TEAM_ONCE")   # tests: one pass, wait for the runs, exit
     while True:
         try:

@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+import time
 
 from . import config, store
 
@@ -12,7 +13,12 @@ def cmd_check(a):
     print("agents: %s" % ", ".join(t.roles))
     print("humans: %s (approvers: %s)" % (", ".join(t.humans), ", ".join(t.approvers())))
     print("orchestrator: %s · reviewer: %s" % (t.orchestrator, t.reviewer or "-"))
-    print("routines: %d · triggers: %d · heartbeat: %s" % (len(t.routines), len(t.triggers), "on" if t.heartbeat else "off"))
+    print("routines: %d · triggers: %d · heartbeat: %s" % (len(t.routines), len(t.triggers),
+                                                         (t.heartbeat.get("when", "always") if t.heartbeat else "off")))
+    print("single door: %s · authority levels: %d · digest: %s · promises required: %s · merge gate: %s · retro: %s" % (
+        "on" if t.single_door else "off", len(t.authority.get("levels") or []),
+        "%02d:%02d" % t.at(t.digest) if t.digest else "off", "on" if t.promises.get("require", t.single_door) else "off",
+        "on" if t.merge_gate is not None else "off", t.retro["agent"] if t.retro else "off"))
     print("database: %s" % config.db_path())
     print("dry run: %s · discord: %s · mailer: %s · github: %s · permission mode: %s" % tuple(
         ["on" if config.flag(k) else "off" for k in ("TEAM_DRY_RUN", "TEAM_DISCORD_ENABLED", "TEAM_MAILER_ENABLED", "TEAM_GITHUB")]
@@ -81,6 +87,36 @@ def cmd_approve(a):
 def cmd_reject(a):
     store.db().execute("UPDATE outbox SET status = 'rejected', error = 'rejected by a human' WHERE id = ? AND status = 'pending'", (a.id,))
     print("rejected #%d" % a.id)
+
+
+def cmd_decisions(a):
+    rows = store.db().execute("SELECT * FROM decisions WHERE status = 'pending' ORDER BY id").fetchall()
+    print("\n".join("%d · %s%s · %s · %s" % (r["id"], r["kind"], " " + r["ref"] if r["ref"] else "", r["owner"],
+                                            " ".join(r["what"].split())[:160]) for r in rows) or "Nothing waits for a human.")
+
+
+def cmd_decide(a):
+    t = config.team()
+    who = a.as_ or t.primary_human
+    if who not in t.approvers():
+        raise SystemExit("%s is not an approver (approvals.approvers in team.json)." % who)
+    try:
+        d = store.decide(store.db(), a.id, {"approve": "approved", "reject": "rejected"}[a.verdict], who, note=a.note)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    print("decision %d %s by %s; %s was told" % (d["id"], d["status"], who, d["owner"]))
+
+
+def cmd_promises(a):
+    rows = store.db().execute("SELECT * FROM promises WHERE status = 'open' ORDER BY due").fetchall()
+    print("\n".join("%d · %s · due %s%s · %s" % (r["id"], r["agent"], time.strftime("%d/%m %H:%M", time.localtime(r["due"])),
+                                                 " · after " + r["depends"] if r["depends"] else "", r["what"]) for r in rows)
+          or "No open promises.")
+
+
+def cmd_digest(a):
+    from . import dispatcher
+    print(dispatcher.digest_text(store.db()) or "Nothing happened today.")
 
 
 def cmd_stop(a):
@@ -154,6 +190,15 @@ def main(argv=None):
     s = sub.add_parser("reject", help="reject a proposed email")
     s.add_argument("id", type=int)
     s.set_defaults(f=cmd_reject)
+    sub.add_parser("decisions", help="the decisions waiting for a human").set_defaults(f=cmd_decisions)
+    s = sub.add_parser("decide", help="approve or reject a pending decision, as a human")
+    s.add_argument("id", type=int)
+    s.add_argument("verdict", choices=["approve", "reject"])
+    s.add_argument("--note", help="a change or a condition, passed to the owner")
+    s.add_argument("--as", dest="as_")
+    s.set_defaults(f=cmd_decide)
+    sub.add_parser("promises", help="the team's open promises").set_defaults(f=cmd_promises)
+    sub.add_parser("digest", help="print today's digest (doesn't post it)").set_defaults(f=cmd_digest)
     sub.add_parser("stop", help="stop starting new runs").set_defaults(f=cmd_stop)
     sub.add_parser("resume", help="resume").set_defaults(f=cmd_resume)
     s = sub.add_parser("mcp-config", help="print the MCP config for a human's own Claude Code session")

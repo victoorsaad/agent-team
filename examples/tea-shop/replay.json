@@ -1,59 +1,79 @@
 {
  "_": "A scripted, made-up conversation for demos of the office (agent-team office --replay). Nothing here happened.",
- "loop_pause": 10,
+ "loop_pause": 12,
  "events": [
   {
    "at": 1,
    "msg": {
     "conv": "bundle",
     "from": "ana",
-    "to": "lead",
+    "to": "ops",
     "kind": "task",
     "text": "Can we have an autumn bundle on the site by Friday? Three teas and the small teapot, 10% off the separate prices."
    }
   },
   {
    "at": 3,
-   "start": "lead"
+   "start": "ops"
   },
   {
    "at": 4,
-   "do": "lead",
+   "do": "ops",
    "text": "opens the inbox"
   },
   {
-   "at": 6,
-   "do": "lead",
+   "at": 5.5,
+   "do": "ops",
    "text": "read catalog/products.json"
+  },
+  {
+   "at": 7,
+   "msg": {
+    "conv": "bundle",
+    "from": "ops",
+    "to": "dev",
+    "kind": "task",
+    "text": "Add an 'Autumn bundle' product: Roasted Oolong, Spiced Chai, Ginger Rooibos + small teapot, price = 90% of the sum. Done when: PR open with the product page."
+   }
   },
   {
    "at": 8,
    "msg": {
     "conv": "bundle",
-    "from": "lead",
-    "to": "dev",
-    "kind": "task",
-    "text": "Add an 'Autumn bundle' product: Roasted Oolong, Spiced Chai, Ginger Rooibos + small teapot, price = 90% of the sum. Done = product page live on a preview, PR open."
-   }
-  },
-  {
-   "at": 9,
-   "msg": {
-    "conv": "bundle",
-    "from": "lead",
+    "from": "ops",
     "to": "marketing",
     "kind": "task",
     "text": "Write the bundle's page copy (60-80 words) and pick the photo. Send it to dev when ready."
    }
   },
   {
+   "at": 9,
+   "do": "ops",
+   "text": "makes a promise"
+  },
+  {
+   "at": 9.2,
+   "promise": {
+    "conv": "bundle",
+    "id": "bundle",
+    "agent": "ops",
+    "what": "Autumn bundle live for Ana",
+    "due": "+3h"
+   }
+  },
+  {
    "at": 10,
-   "do": "lead",
-   "text": "logs progress"
+   "msg": {
+    "conv": "bundle",
+    "from": "ops",
+    "to": "ana",
+    "kind": "reply",
+    "text": "Got it: dev builds the bundle page, marketing writes the copy. Promised by Friday 18:00; the price change will need your yes before it goes live."
+   }
   },
   {
    "at": 11,
-   "end": "lead",
+   "end": "ops",
    "tokens": 18000,
    "cost": 0.06
   },
@@ -130,7 +150,22 @@
    "text": "read TEAM.md"
   },
   {
+   "at": 22.5,
+   "do": "marketing",
+   "text": "asks for approval"
+  },
+  {
    "at": 23,
+   "decision": {
+    "conv": "bundle",
+    "id": "boost",
+    "from": "marketing",
+    "kind": "spend",
+    "text": "Boost the bundle post for $30 over the weekend? Recommend yes: the last boost brought 9 orders."
+   }
+  },
+  {
+   "at": 23.5,
    "end": "marketing",
    "tokens": 26000,
    "cost": 0.09
@@ -138,7 +173,7 @@
   {
    "at": 24,
    "do": "dev",
-   "text": "$ npm test"
+   "text": "edit src/lib/pricing.ts"
   },
   {
    "at": 25,
@@ -147,12 +182,12 @@
   },
   {
    "at": 26,
-   "msg": {
+   "decision": {
     "conv": "ticket",
+    "id": "lid",
     "from": "support",
-    "to": "ana",
-    "kind": "approval",
-    "text": "Order #1047 arrived with a cracked lid. Policy covers a replacement lid; draft reply ready. OK to send?"
+    "kind": "other",
+    "text": "Order #1047 arrived with a cracked lid. The policy covers a replacement lid; reply draft ready. OK to send?"
    }
   },
   {
@@ -167,13 +202,28 @@
    "cost": 0.03
   },
   {
+   "at": 27.5,
+   "do": "dev",
+   "text": "makes a promise"
+  },
+  {
+   "at": 27.6,
+   "promise": {
+    "conv": "bundle",
+    "id": "pr",
+    "agent": "dev",
+    "what": "Check the bundle page once PR #48 is live",
+    "due": "+2h"
+   }
+  },
+  {
    "at": 28,
    "msg": {
     "conv": "bundle",
     "from": "dev",
-    "to": "lead",
+    "to": "ops",
     "kind": "reply",
-    "text": "PR #48 open: bundle product + page, price computed from the three teas and the teapot. Touches prices, so the reviewer will ask the owners."
+    "text": "PR #48 open: bundle product + page, price computed from the catalog. It touches src/lib/pricing.ts, so the gate will ask an owner."
    }
   },
   {
@@ -183,52 +233,18 @@
    "cost": 0.24
   },
   {
-   "at": 30,
-   "start": "lead"
-  },
-  {
-   "at": 30.5,
-   "start": "dev"
-  },
-  {
    "at": 31,
    "msg": {
     "conv": "bundle",
     "from": "system",
     "to": "reviewer",
     "kind": "task",
-    "text": "PR #48 (Autumn bundle page) finished CI: green."
+    "text": "PR #48 (Autumn bundle page) finished CI: green. You review; the merge gate merges."
    }
-  },
-  {
-   "at": 31,
-   "do": "lead",
-   "text": "opens the inbox"
-  },
-  {
-   "at": 31.5,
-   "do": "dev",
-   "text": "edit src/pages/bundles/autumn.tsx (page copy)"
   },
   {
    "at": 32,
    "start": "reviewer"
-  },
-  {
-   "at": 32,
-   "end": "lead",
-   "tokens": 6000,
-   "cost": 0.02
-  },
-  {
-   "at": 33,
-   "msg": {
-    "conv": "ticket",
-    "from": "leo",
-    "to": "support",
-    "kind": "reply",
-    "text": "Approved."
-   }
   },
   {
    "at": 33,
@@ -236,91 +252,209 @@
    "text": "$ gh pr diff 48"
   },
   {
-   "at": 33,
-   "do": "dev",
-   "text": "$ git push"
-  },
-  {
    "at": 34,
-   "start": "support"
-  },
-  {
-   "at": 34,
-   "end": "dev",
-   "tokens": 15000,
-   "cost": 0.05
+   "msg": {
+    "conv": "ticket",
+    "from": "leo",
+    "to": "ops",
+    "kind": "reply",
+    "text": "Approved."
+   }
   },
   {
    "at": 35,
-   "do": "support",
-   "text": "replies"
+   "start": "ops"
+  },
+  {
+   "at": 35.5,
+   "do": "ops",
+   "text": "records a decision"
   },
   {
    "at": 36,
+   "decide": "lid",
+   "verdict": "approved",
+   "by": "leo",
+   "via": "ops"
+  },
+  {
+   "at": 36.5,
    "do": "reviewer",
    "text": "read src/lib/pricing.ts"
   },
   {
    "at": 37,
-   "end": "support",
+   "msg": {
+    "conv": "ticket",
+    "from": "ops",
+    "to": "leo",
+    "kind": "reply",
+    "text": "Done: support sends the replacement-lid reply for order #1047 now."
+   }
+  },
+  {
+   "at": 37.5,
+   "end": "ops",
    "tokens": 5000,
    "cost": 0.02
   },
   {
    "at": 38,
-   "do": "reviewer",
-   "text": "asks for approval"
+   "start": "support"
+  },
+  {
+   "at": 38.5,
+   "do": "support",
+   "text": "replies"
   },
   {
    "at": 39,
-   "msg": {
-    "conv": "bundle",
-    "from": "reviewer",
-    "to": "ana",
-    "kind": "approval",
-    "text": "PR #48 adds the autumn bundle at 10% off (price from the catalog, no hardcoded numbers). Looks good; it touches prices, so: merge?"
+   "done": {
+    "conv": "ticket",
+    "agent": "support",
+    "text": "Replacement lid sent for order #1047"
    }
   },
   {
    "at": 40,
+   "end": "support",
+   "tokens": 5000,
+   "cost": 0.02
+  },
+  {
+   "at": 40,
+   "do": "reviewer",
+   "text": "reviews a PR"
+  },
+  {
+   "at": 41,
    "end": "reviewer",
    "tokens": 34000,
    "cost": 0.11
   },
   {
-   "at": 46,
-   "msg": {
+   "at": 43,
+   "decision": {
     "conv": "bundle",
-    "from": "ana",
-    "to": "reviewer",
-    "kind": "reply",
-    "text": "Go ahead."
+    "id": "pr48",
+    "from": "ops",
+    "owner": "reviewer",
+    "kind": "pr",
+    "ref": "pr:48",
+    "text": "PR #48 (Autumn bundle page) touches src/lib/pricing.ts, so it needs an owner's yes before it goes in. The reviewer passed it."
    }
-  },
-  {
-   "at": 47,
-   "start": "reviewer"
   },
   {
    "at": 48,
-   "do": "reviewer",
-   "text": "$ gh pr merge 48 --squash"
-  },
-  {
-   "at": 50,
    "msg": {
     "conv": "bundle",
-    "from": "reviewer",
-    "to": "ana",
+    "from": "ana",
+    "to": "ops",
     "kind": "reply",
-    "text": "Merged; the autumn bundle is live."
+    "text": "approve"
    }
   },
   {
+   "at": 49,
+   "start": "ops"
+  },
+  {
+   "at": 49.5,
+   "do": "ops",
+   "text": "opens the inbox"
+  },
+  {
    "at": 51,
-   "end": "reviewer",
-   "tokens": 8000,
+   "msg": {
+    "conv": "bundle",
+    "from": "ops",
+    "to": "ana",
+    "kind": "reply",
+    "text": "Approve which: PR #48 (the bundle page) or the $30 boost? Two things wait here."
+   }
+  },
+  {
+   "at": 52,
+   "end": "ops",
+   "tokens": 7000,
    "cost": 0.03
+  },
+  {
+   "at": 57,
+   "msg": {
+    "conv": "bundle",
+    "from": "ana",
+    "to": "ops",
+    "kind": "reply",
+    "text": "The PR. No boost this week."
+   }
+  },
+  {
+   "at": 58,
+   "start": "ops"
+  },
+  {
+   "at": 58.5,
+   "do": "ops",
+   "text": "records a decision"
+  },
+  {
+   "at": 59,
+   "decide": "pr48",
+   "verdict": "approved",
+   "by": "ana",
+   "via": "ops"
+  },
+  {
+   "at": 59.5,
+   "decide": "boost",
+   "verdict": "rejected",
+   "by": "ana",
+   "via": "ops"
+  },
+  {
+   "at": 60,
+   "end": "ops",
+   "tokens": 6000,
+   "cost": 0.02
+  },
+  {
+   "at": 62,
+   "done": {
+    "conv": "bundle",
+    "agent": "reviewer",
+    "text": "PR #48 merged: Autumn bundle page",
+    "proof": "https://example.com/storefront/pull/48"
+   }
+  },
+  {
+   "at": 63,
+   "msg": {
+    "conv": "bundle",
+    "from": "ops",
+    "to": "ana",
+    "kind": "update",
+    "text": "Done: PR #48 merged (Autumn bundle page), live in a minute. The boost stays off this week."
+   }
+  },
+  {
+   "at": 63.5,
+   "kept": "bundle",
+   "proof": "https://example.com/storefront/pull/48"
+  },
+  {
+   "at": 66,
+   "msg": {
+    "conv": "promo",
+    "from": "marketing",
+    "to": "ops",
+    "kind": "share",
+    "text": "Autumn teas are 40% of this week's page views: the bundle should open Monday's newsletter."
+   }
+  },
+  {
+   "at": 70,
+   "digest": true
   }
  ]
 }

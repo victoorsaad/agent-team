@@ -7,9 +7,15 @@ checks, out of band, that a human approved this exact email (same recipient, sub
   not be able to read (run agents as another OS user; see SECURITY.md);
 - approved in the Discord thread: the mailer reads that message from Discord itself and checks its author is a human
   in TEAM_DISCORD_USERS, that it says "approve" and that the email (with its code) was shown before it.
-Then it sends through SMTP, at most MAILER_DAILY a day, optionally only inside MAILER_WINDOW hours (MAILER_TZ)."""
+Then it sends through SMTP, at most MAILER_DAILY a day, optionally only inside MAILER_WINDOW hours (MAILER_TZ).
+
+With MAILER_CHECK_HOSTS (your own site, e.g. shop.example.com), every link in the body to one of those hosts must
+exist: a 404 or 410 rejects the email (an agent stitched a link together), a 5xx or a network error leaves it approved
+for the next round (the site is restarting). A reply ("Re: <subject>") may only carry links the first email to that
+person already had."""
 import hmac
 import json
+import re
 import smtplib
 import ssl
 import time
@@ -71,6 +77,47 @@ def verify(c, row):
     return "no verifiable approval"
 
 
+LINK_RE = re.compile(r"https?://([^/\s\"'<>]+)(/[^\s\"'<>]*)?", re.I)
+
+
+def links(body):
+    """The links in a body that point to MAILER_CHECK_HOSTS (trailing punctuation trimmed)."""
+    hosts = {h.strip().lower() for h in config.setting("MAILER_CHECK_HOSTS").split(",") if h.strip()}
+    out = set()
+    for m in LINK_RE.finditer(body or ""):
+        if m.group(1).lower().split(":")[0] in hosts:
+            out.add(m.group(0).rstrip(".,;:!?)]"))
+    return out
+
+
+def link_exists(url):
+    """True / False (404 or 410). Anything else that fails (5xx, network) raises, so the email waits for the next round."""
+    req = urllib.request.Request(url, headers={"User-Agent": "agent-team-mailer/1.0"})
+    try:
+        urllib.request.urlopen(req, timeout=20).close()
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            return False
+        raise RuntimeError("link check %s: %s" % (url, e.code)) from None
+
+
+def links_ok(c, row):
+    """None when the email's links to our own hosts are real (and, for a "Re:", the first email's), else why not."""
+    found = links(row["body"])
+    for url in sorted(found):
+        if not link_exists(url):
+            return "the link %s doesn't exist" % url
+    if found and row["subject"].strip().lower().startswith("re:"):
+        first = re.sub(r"^(re:\s*)+", "", row["subject"].strip(), flags=re.I)
+        earlier = c.execute("SELECT body FROM outbox WHERE lower(to_email) = lower(?) AND status = 'sent' AND subject = ?",
+                            (row["to_email"], first)).fetchall()
+        before = set().union(*[links(e["body"]) for e in earlier]) if earlier else set()
+        if before and not found <= before:
+            return "the reply links somewhere the first email didn't"
+    return None
+
+
 def send(row):
     if config.flag("TEAM_DRY_RUN"):
         print("mailer (dry run) would send to %s: %s" % (row["to_email"], row["subject"]), flush=True)
@@ -101,7 +148,7 @@ def tick(c):
             print("daily cap reached", flush=True)
             return
         try:
-            why = verify(c, row)
+            why = verify(c, row) or links_ok(c, row)
             if why:
                 c.execute("UPDATE outbox SET status = 'rejected', error = ? WHERE id = ?", (why, row["id"]))
                 notify.say("Email %d not sent: %s." % (row["id"], why), thread_id=where)
@@ -109,6 +156,7 @@ def tick(c):
             send(row)
             c.execute("UPDATE outbox SET status = 'sent', sent_at = ?, error = NULL WHERE id = ?", (time.time(), row["id"]))
             notify.say("Sent to %s: %s" % (row["to_email"], row["subject"]), thread_id=where)
+            store.did(c, row["agent"], "Email to %s: %s" % (row["to_email"], row["subject"]), thread=row["thread"])
         except (smtplib.SMTPException, urllib.error.HTTPError) as e:
             c.execute("UPDATE outbox SET status = 'failed', error = ? WHERE id = ?", (repr(e)[:300], row["id"]))
             notify.say("Email %d failed: %s" % (row["id"], repr(e)[:150]), thread_id=where)

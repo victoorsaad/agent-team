@@ -16,6 +16,22 @@ The defenses below limit **what the tools allow** and put a human in front of an
   mailer sends only emails approved with `agent-team approve <id>` (an HMAC signed with `TEAM_APPROVAL_SECRET`) or
   approved by a listed human in the Discord thread (re-checked against Discord's API), and only if the email is
   byte-for-byte what the human saw.
+- **The merge gate (optional, `merge_gate` in team.json).** With it on, the reviewer only records a verdict and the
+  dispatcher does the merge. What the code enforces, for every merge the dispatcher makes: the verdict is for the PR's
+  current head commit (a new push needs a new review); CI finished and passed on it; no decision for that PR is pending,
+  and none was rejected after the review; a PR touching `sensitive_paths` waits for a human's approval in `decisions`;
+  no `deploy_workflow` run is in progress; one merge a minute. What it does **not** enforce: it can't stop an agent
+  that holds a GitHub token with merge rights from running `gh pr merge` itself, and `decisions` lives in the mailbox,
+  which agents can write (the `decide` tool checks that a human spoke in that conversation, but that is a check on the
+  orchestrator, not a boundary). To make the gate a real boundary, give the agents' token no merge rights (or require
+  a human review in branch protection) and let only the gate's identity merge.
+- **Decisions and the orchestrator.** `request_approval` opens a row in `decisions`; with a single door only the
+  orchestrator (and the humans, from the CLI or their own session) can record an answer, and only for an approver.
+  With Discord, a human's "approve" in a thread where a PR or another decision is also pending approves no email
+  unless it says so ("approve the emails") or names pending email ids; the mailer still re-checks the approval
+  message on Discord before sending. These reduce mistakes; the e-mail check above is what is enforced.
+- **Links in e-mail (optional, `MAILER_CHECK_HOSTS`).** The mailer refuses an email whose links to your own hosts
+  answer 404/410, and a reply that links somewhere the first email didn't; a 5xx keeps the email for the next round.
 - **Least privilege by default.** `TEAM_PERMISSION_MODE=default` plus a per-role `allowed_tools` list. Integrations
   (Discord, e-mail, GitHub) are off until you turn them on.
 - **Budgets.** Few runs at once, a daily cap per agent, a daily cap on self-started work, a timeout per run, a pause
@@ -35,7 +51,11 @@ The defenses below limit **what the tools allow** and put a human in front of an
 3. **Give read-only access to data.** If agents need production data, give them a read-only role with no personal
    data or credentials in reach.
 4. **Restrict the network** if you can (egress allow-list). An agent that can't reach a host can't leak to it.
-5. **Review what they merge.** Require a human approval for PRs that touch money, auth or customer-facing screens.
+5. **Review what they merge.** Require a human approval for PRs that touch money, auth or customer-facing screens:
+   list those paths in `merge_gate.sensitive_paths`, and remove merge rights from the agents' GitHub token so the gate
+   is the only way in.
+6. **The retro reads the whole mailbox** (read-only), including proposed emails. Give that role only `sqlite3
+   -readonly` and the repository, and keep its changes behind a human's approval (the example does both).
 
 ## Reporting a vulnerability
 

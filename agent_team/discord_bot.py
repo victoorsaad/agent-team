@@ -4,14 +4,64 @@ create threads.
 
 - A new message in the channel starts a conversation in its own thread: "marketing, what's the angle for Friday?"
   goes to that agent; without a name it goes to the orchestrator.
-- Inside a thread, just answer: it goes to the agent who spoke last there (or to the one you name).
+- Inside a thread, just answer: it goes to the agent who spoke last there (or to the one you name). With
+  "single_door": true in team.json it goes to the orchestrator instead, who knows what's pending there and answers
+  with a receipt (the agent who spoke last is often not the one the human is answering).
 - "approve" (or "approve 12") in a thread approves the emails pending in that conversation; the mailer re-checks it.
+  With a PR or another decision also pending there, a plain "approve" is ambiguous and approves no email: say
+  "approve the emails" or their numbers (bare numbers count only when they are pending email ids).
 Only the Discord accounts in TEAM_DISCORD_USERS (`<discord user id>:<human id>,…`) are heard. Attachments are saved
 under TEAM_FILES/<message id>/ and their paths go in the message, so agents can open them."""
 import os
 import re
 
 from . import config, notify, store
+
+
+def kind_of(body):
+    return "ask" if body.rstrip().endswith("?") else "task"
+
+
+def approve_emails(c, text, tid, ref):
+    """A human's message in a conversation → the pending emails it approves (store.email_approval decides which).
+    `ref` is the chat message id: the mailer reads that message back from Discord before sending.
+    Returns (warning for the human or None, note for the agent who gets the message or None)."""
+    dec, mails = store.pending(c, tid)
+    ids, note = store.email_approval(text, dec, [m["id"] for m in mails])
+    if ids is None:
+        return None, note
+    q = ",".join("?" * len(ids))
+    done = c.execute("UPDATE outbox SET status = 'approved', approved_by = 'discord', approval_ref = ? WHERE thread = ? "
+                     "AND status = 'pending' AND id IN (%s)" % q, [str(ref), tid] + ids).rowcount
+    note = "[bot: %d email(s) approved by this message; the mailer sends them]" % done if done else None
+    missing = sorted(set(ids) - {m["id"] for m in mails})
+    if missing:
+        return ("Email no. %s isn't pending in this conversation: approve it in the thread where it was shown."
+                % ", ".join(map(str, missing))), note
+    return None, note
+
+
+def answer(c, me, to, body, tid):
+    """A human's message inside a conversation. `to` is the agent they named, if any. Without a name: with a single
+    door, the orchestrator; otherwise the agent who spoke last there."""
+    t = config.team()
+    humans = list(t.humans)
+    q = ",".join("?" * len(humans))
+    if t.single_door:
+        to = to or t.orchestrator
+        last = c.execute("SELECT id FROM messages WHERE thread = ? AND sender NOT IN (%s) AND sender <> 'system' "
+                         "AND (sender = ? OR recipient IN (%s)) ORDER BY id DESC LIMIT 1" % (q, q), [tid] + humans + [to] + humans).fetchone()
+        if last:
+            c.execute("UPDATE messages SET status = 'done' WHERE id = ? AND status <> 'done' AND recipient IN (%s)" % q, [last["id"]] + humans)
+            return store.send(c, me, to, "reply", body, reply_to=last["id"], mirror=False)
+        return store.send(c, me, to, kind_of(body), body, mirror=False, thread=tid)
+    last = c.execute("SELECT id, sender FROM messages WHERE thread = ? AND sender NOT IN (%s) AND sender <> 'system' " % q
+                     + ("AND sender = ? " if to else "") + "ORDER BY id DESC LIMIT 1",
+                     [tid] + humans + ([to] if to else [])).fetchone()
+    if last:
+        c.execute("UPDATE messages SET status = 'done' WHERE id = ? AND status <> 'done'", (last["id"],))
+        return store.send(c, me, last["sender"], "reply", body, reply_to=last["id"], mirror=False)
+    return store.send(c, me, to or t.orchestrator, kind_of(body), body, mirror=False, thread=tid)
 
 
 def build():
@@ -33,32 +83,6 @@ def build():
     def named(text):
         m = name_re.match(text)
         return (names[m.group(1).lower()], text[m.end():]) if m else (None, text)
-
-    def kind_of(body):
-        return "ask" if body.rstrip().endswith("?") else "task"
-
-    def approve_emails(c, text, tid, discord_id):
-        if not store.APPROVE_RE.match(text):
-            return
-        ids = [int(n) for n in re.findall(r"\b(\d+)\b", text)]
-        q = "UPDATE outbox SET status = 'approved', approved_by = 'discord', approval_ref = ? WHERE thread = ? AND status = 'pending'"
-        args = [str(discord_id), tid]
-        if ids:
-            q += " AND id IN (%s)" % ",".join("?" * len(ids))
-            args += ids
-        c.execute(q, args)
-
-    def answer(c, me, text, tid):
-        to, body = named(text)
-        humans = list(t.humans)
-        q = ",".join("?" * len(humans))
-        last = c.execute("SELECT id, sender FROM messages WHERE thread = ? AND sender NOT IN (%s) AND sender <> 'system' " % q
-                         + ("AND sender = ? " if to else "") + "ORDER BY id DESC LIMIT 1",
-                         [tid] + humans + ([to] if to else [])).fetchone()
-        if last:
-            c.execute("UPDATE messages SET status = 'done' WHERE id = ? AND status <> 'done'", (last["id"],))
-            return store.send(c, me, last["sender"], "reply", body, reply_to=last["id"], mirror=False)
-        return store.send(c, me, to or t.orchestrator, kind_of(body), body, mirror=False, thread=tid)
 
     async def save_files(msg):
         lines = []
@@ -97,8 +121,11 @@ def build():
         try:
             tid = notify.thread_of(c, msg.channel.id) if in_thread else None
             if tid:
-                approve_emails(c, said, tid, msg.id)
-                answer(c, me, text[:9000], tid)
+                warn, note = approve_emails(c, said, tid, msg.id)
+                if warn:
+                    await msg.reply(warn, mention_author=False)
+                to, body = named(text[:9000])
+                answer(c, me, to, body + ("\n\n" + note if note else ""), tid)
             else:
                 to, body = named(text[:9000])
                 mid = store.send(c, me, to or t.orchestrator, kind_of(body), body, mirror=False)

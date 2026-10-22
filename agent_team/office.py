@@ -1,5 +1,5 @@
 """The office: a live 3D screen of the team (who's working, on what, who talks to whom). Serves office.html and two
-JSON endpoints: /api/team (who is on the team) and /api/state (what they're doing).
+JSON endpoints: /api/team (who is on the team) and /api/state (what they're doing, and what got done today).
 
 Access, in order: localhost always; with TEAM_OFFICE_TOKEN set, a request carrying it (?token=… once, then a cookie);
 behind an authenticating proxy (Cloudflare Access, oauth2-proxy…), a request from TEAM_OFFICE_TRUSTED_PROXIES whose
@@ -50,7 +50,7 @@ def snapshot(c=None):
         "SELECT id, sender, recipient, kind, body, created_at FROM messages WHERE kind <> 'update' AND sender <> 'system' "
         "ORDER BY id DESC LIMIT 40")]
     feed = [{"t": m["created_at"], "from": m["sender"], "to": m["recipient"], "kind": m["kind"],
-             "text": " ".join(m["body"].split())[:260]} for m in msgs]
+             "text": " ".join(m["body"].replace("**", "").split())[:260]} for m in msgs]
     convs = []
     for r in c.execute("SELECT thread, count(*) AS runs, sum(tokens_in + tokens_out) AS tokens, sum(cost_usd) AS cost, "
                        "max(ended_at) AS last, group_concat(DISTINCT agent) AS agents FROM runs WHERE started_at >= ? "
@@ -59,9 +59,13 @@ def snapshot(c=None):
         convs.append({"thread": r["thread"], "runs": r["runs"], "tokens": r["tokens"] or 0, "cost": r["cost"] or 0, "last": r["last"],
                       "agents": (r["agents"] or "").split(","), "from": root["sender"] if root else None,
                       "subject": " ".join((root["body"] if root else "").split())[:140]})
+    done = [{"t": r["ts"], "agent": r["agent"], "origin": r["origin"], "text": r["text"], "proof": r["proof"]} for r in c.execute(
+        "SELECT ts, agent, origin, text, proof FROM done WHERE ts >= ? UNION ALL "
+        "SELECT created_at, sender, 'team', body, NULL FROM messages WHERE kind = 'share' AND created_at >= ? ORDER BY 1 DESC LIMIT 80",
+        (day, day))]
     tot = c.execute("SELECT coalesce(sum(tokens_in + tokens_out), 0), coalesce(sum(cost_usd), 0) FROM runs WHERE started_at >= ?", (day,)).fetchone()
     return {
-        "now": now, "conversations": convs, "tokens_today": tot[0], "cost_today": tot[1], "agents": agents, "feed": feed,
+        "now": now, "conversations": convs, "done": done, "tokens_today": tot[0], "cost_today": tot[1], "agents": agents, "feed": feed,
         "paused_until": float(st.get("paused_until") or 0), "stopped": st.get("stopped") == "1", "replay": st.get("replay") == "1",
         "runs_today": c.execute("SELECT count(*) FROM runs WHERE started_at >= ?", (day,)).fetchone()[0],
         "msgs_today": c.execute("SELECT count(*) FROM messages WHERE created_at >= ? AND kind <> 'update'", (day,)).fetchone()[0],

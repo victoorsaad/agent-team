@@ -1,0 +1,69 @@
+{
+  "name": "Fern & Kettle",
+  "description": "A made-up two-person online tea shop (loose-leaf tea, a few teapots), used as the example team. Nothing here is a real business.",
+  "language": "en",
+  "orchestrator": "lead",
+  "reviewer": "reviewer",
+  "human_message_max": 600,
+  "playbook_file": "TEAM.md",
+
+  "humans": [
+    {"id": "ana", "name": "Ana", "summary": "Owner. Decisions and approvals only.", "color": "#3d3a55"},
+    {"id": "leo", "name": "Leo", "summary": "Partner. Same as Ana: decisions and approvals.", "color": "#2f4a5c"}
+  ],
+
+  "roles": [
+    {"id": "lead", "name": "Lead", "room": "lead", "color": "#f0a43a",
+     "summary": "Orchestrator: breaks work down, assigns it, chases what's stuck",
+     "prompt_file": "prompts/lead.md"},
+    {"id": "dev", "name": "Dev", "room": "back_left", "color": "#2fa7d8",
+     "summary": "The storefront code: pages, checkout, fixes",
+     "prompt_file": "prompts/dev.md",
+     "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "Bash(gh:*)", "Bash(npm test:*)"]},
+    {"id": "reviewer", "name": "Reviewer", "room": "back_left", "color": "#2fb37a",
+     "summary": "Reviews every pull request once and merges it when it's good",
+     "prompt_file": "prompts/reviewer.md",
+     "allowed_tools": ["Read", "Glob", "Grep", "Bash(git:*)", "Bash(gh:*)"]},
+    {"id": "marketing", "name": "Marketing", "room": "back_right", "color": "#f0675a",
+     "summary": "Product pages, newsletter drafts, what to promote this week",
+     "prompt_file": "prompts/marketing.md",
+     "allowed_tools": ["Read", "Edit", "Write", "Glob", "Grep", "WebSearch", "WebFetch"]},
+    {"id": "support", "name": "Support", "room": "back_right", "color": "#e0559b",
+     "summary": "Customer questions, order problems, reply drafts",
+     "prompt_file": "prompts/support.md",
+     "allowed_tools": ["Read", "Glob", "Grep"]}
+  ],
+
+  "approvals": {
+    "approvers": ["ana", "leo"],
+    "rules": [
+      "Anything that leaves the shop: emails to customers or suppliers (always through propose_email), posts, ads.",
+      "Spending money: a new paid tool, ads, a supplier order.",
+      "Prices, discounts and refunds above the support policy in TEAM.md.",
+      "Merging a pull request that touches checkout, payments or prices.",
+      "Changing production outside a reviewed pull request."
+    ]
+  },
+
+  "heartbeat": {
+    "agent": "lead", "every_min": 120,
+    "prompt": "Heartbeat ({now}). Look at the backlog (open issues and PRs, the team log). Assign the most valuable next steps, one clear task each, and chase anything stuck for more than a day. If nothing is worth doing, post_update \"nothing to move\" and stop."
+  },
+
+  "routines": [
+    {"name": "morning-check", "agent": "lead", "days": [0, 1, 2, 3, 4], "at": "07:30",
+     "prompt": "Morning check ({now}): run the tests on a clean checkout, list PRs open for more than a day. Share one short message only if something is wrong."},
+    {"name": "weekly-promo", "agent": "marketing", "days": [0], "at": "10:00",
+     "prompt": "Weekly promo ({now}): pick one product to feature this week and draft the newsletter. Ask for approval with the draft; nothing goes out without it."}
+  ],
+
+  "triggers": [
+    {"name": "new-support-tickets", "kind": "command", "agent": "support", "every_min": 30,
+     "command": ["python3", "scripts/fake_tickets.py"],
+     "prompt": "New customer messages ({name}). Draft a reply for each and send the drafts to the humans in one request_approval:\n{items}"}
+  ],
+
+  "office": {
+    "rooms": {"back_left": "Workshop", "back_right": "Marketing & Support", "lead": "Lead", "lounge": "Kitchen", "humans": "Owners"}
+  }
+}

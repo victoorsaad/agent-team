@@ -1,0 +1,326 @@
+{
+ "_": "A scripted, made-up conversation for demos of the office (agent-team office --replay). Nothing here happened.",
+ "loop_pause": 10,
+ "events": [
+  {
+   "at": 1,
+   "msg": {
+    "conv": "bundle",
+    "from": "ana",
+    "to": "lead",
+    "kind": "task",
+    "text": "Can we have an autumn bundle on the site by Friday? Three teas and the small teapot, 10% off the separate prices."
+   }
+  },
+  {
+   "at": 3,
+   "start": "lead"
+  },
+  {
+   "at": 4,
+   "do": "lead",
+   "text": "opens the inbox"
+  },
+  {
+   "at": 6,
+   "do": "lead",
+   "text": "read catalog/products.json"
+  },
+  {
+   "at": 8,
+   "msg": {
+    "conv": "bundle",
+    "from": "lead",
+    "to": "dev",
+    "kind": "task",
+    "text": "Add an 'Autumn bundle' product: Roasted Oolong, Spiced Chai, Ginger Rooibos + small teapot, price = 90% of the sum. Done = product page live on a preview, PR open."
+   }
+  },
+  {
+   "at": 9,
+   "msg": {
+    "conv": "bundle",
+    "from": "lead",
+    "to": "marketing",
+    "kind": "task",
+    "text": "Write the bundle's page copy (60-80 words) and pick the photo. Send it to dev when ready."
+   }
+  },
+  {
+   "at": 10,
+   "do": "lead",
+   "text": "logs progress"
+  },
+  {
+   "at": 11,
+   "end": "lead",
+   "tokens": 18000,
+   "cost": 0.06
+  },
+  {
+   "at": 12,
+   "start": "dev"
+  },
+  {
+   "at": 12.5,
+   "start": "marketing"
+  },
+  {
+   "at": 13,
+   "do": "dev",
+   "text": "opens the inbox"
+  },
+  {
+   "at": 14,
+   "do": "marketing",
+   "text": "opens the inbox"
+  },
+  {
+   "at": 15,
+   "do": "dev",
+   "text": "$ git worktree add ../work/autumn-bundle -b feat/autumn-bundle"
+  },
+  {
+   "at": 16,
+   "do": "marketing",
+   "text": "read catalog/teas/roasted-oolong.md"
+  },
+  {
+   "at": 18,
+   "do": "dev",
+   "text": "edit catalog/products.json"
+  },
+  {
+   "at": 19,
+   "do": "marketing",
+   "text": "web: autumn tea pairing ideas"
+  },
+  {
+   "at": 20,
+   "msg": {
+    "conv": "ticket",
+    "from": "system",
+    "to": "support",
+    "kind": "task",
+    "text": "New customer messages: Order #1047, cracked teapot lid."
+   }
+  },
+  {
+   "at": 21,
+   "do": "dev",
+   "text": "write src/pages/bundles/autumn.tsx"
+  },
+  {
+   "at": 21,
+   "start": "support"
+  },
+  {
+   "at": 22,
+   "msg": {
+    "conv": "bundle",
+    "from": "marketing",
+    "to": "dev",
+    "kind": "task",
+    "text": "Copy for the bundle page is in copy/autumn-bundle.md; photo: images/autumn-flatlay.jpg."
+   }
+  },
+  {
+   "at": 22,
+   "do": "support",
+   "text": "read TEAM.md"
+  },
+  {
+   "at": 23,
+   "end": "marketing",
+   "tokens": 26000,
+   "cost": 0.09
+  },
+  {
+   "at": 24,
+   "do": "dev",
+   "text": "$ npm test"
+  },
+  {
+   "at": 25,
+   "do": "support",
+   "text": "asks for approval"
+  },
+  {
+   "at": 26,
+   "msg": {
+    "conv": "ticket",
+    "from": "support",
+    "to": "ana",
+    "kind": "approval",
+    "text": "Order #1047 arrived with a cracked lid. Policy covers a replacement lid; draft reply ready. OK to send?"
+   }
+  },
+  {
+   "at": 27,
+   "do": "dev",
+   "text": "$ gh pr create --title \"Autumn bundle page\""
+  },
+  {
+   "at": 27,
+   "end": "support",
+   "tokens": 9000,
+   "cost": 0.03
+  },
+  {
+   "at": 28,
+   "msg": {
+    "conv": "bundle",
+    "from": "dev",
+    "to": "lead",
+    "kind": "reply",
+    "text": "PR #48 open: bundle product + page, price computed from the three teas and the teapot. Touches prices, so the reviewer will ask the owners."
+   }
+  },
+  {
+   "at": 29,
+   "end": "dev",
+   "tokens": 61000,
+   "cost": 0.24
+  },
+  {
+   "at": 30,
+   "start": "lead"
+  },
+  {
+   "at": 30.5,
+   "start": "dev"
+  },
+  {
+   "at": 31,
+   "msg": {
+    "conv": "bundle",
+    "from": "system",
+    "to": "reviewer",
+    "kind": "task",
+    "text": "PR #48 (Autumn bundle page) finished CI: green."
+   }
+  },
+  {
+   "at": 31,
+   "do": "lead",
+   "text": "opens the inbox"
+  },
+  {
+   "at": 31.5,
+   "do": "dev",
+   "text": "edit src/pages/bundles/autumn.tsx (page copy)"
+  },
+  {
+   "at": 32,
+   "start": "reviewer"
+  },
+  {
+   "at": 32,
+   "end": "lead",
+   "tokens": 6000,
+   "cost": 0.02
+  },
+  {
+   "at": 33,
+   "msg": {
+    "conv": "ticket",
+    "from": "leo",
+    "to": "support",
+    "kind": "reply",
+    "text": "Approved."
+   }
+  },
+  {
+   "at": 33,
+   "do": "reviewer",
+   "text": "$ gh pr diff 48"
+  },
+  {
+   "at": 33,
+   "do": "dev",
+   "text": "$ git push"
+  },
+  {
+   "at": 34,
+   "start": "support"
+  },
+  {
+   "at": 34,
+   "end": "dev",
+   "tokens": 15000,
+   "cost": 0.05
+  },
+  {
+   "at": 35,
+   "do": "support",
+   "text": "replies"
+  },
+  {
+   "at": 36,
+   "do": "reviewer",
+   "text": "read src/lib/pricing.ts"
+  },
+  {
+   "at": 37,
+   "end": "support",
+   "tokens": 5000,
+   "cost": 0.02
+  },
+  {
+   "at": 38,
+   "do": "reviewer",
+   "text": "asks for approval"
+  },
+  {
+   "at": 39,
+   "msg": {
+    "conv": "bundle",
+    "from": "reviewer",
+    "to": "ana",
+    "kind": "approval",
+    "text": "PR #48 adds the autumn bundle at 10% off (price from the catalog, no hardcoded numbers). Looks good; it touches prices, so: merge?"
+   }
+  },
+  {
+   "at": 40,
+   "end": "reviewer",
+   "tokens": 34000,
+   "cost": 0.11
+  },
+  {
+   "at": 46,
+   "msg": {
+    "conv": "bundle",
+    "from": "ana",
+    "to": "reviewer",
+    "kind": "reply",
+    "text": "Go ahead."
+   }
+  },
+  {
+   "at": 47,
+   "start": "reviewer"
+  },
+  {
+   "at": 48,
+   "do": "reviewer",
+   "text": "$ gh pr merge 48 --squash"
+  },
+  {
+   "at": 50,
+   "msg": {
+    "conv": "bundle",
+    "from": "reviewer",
+    "to": "ana",
+    "kind": "reply",
+    "text": "Merged; the autumn bundle is live."
+   }
+  },
+  {
+   "at": 51,
+   "end": "reviewer",
+   "tokens": 8000,
+   "cost": 0.03
+  }
+ ]
+}

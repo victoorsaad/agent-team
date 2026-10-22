@@ -1,0 +1,19 @@
+[Unit]
+Description=agent-team office (live 3D screen)
+After=network-online.target
+
+[Service]
+User=agents
+UMask=0007
+EnvironmentFile=@ETC@/env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/env
+ExecStart=/usr/bin/python3 -m agent_team office
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@DATA@
+
+[Install]
+WantedBy=multi-user.target

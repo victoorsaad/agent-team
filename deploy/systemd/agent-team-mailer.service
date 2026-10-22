@@ -1,0 +1,20 @@
+[Unit]
+Description=agent-team mailer (sends human-approved e-mail; optional)
+After=network-online.target
+
+[Service]
+User=mailer
+UMask=0007
+EnvironmentFile=@ETC@/env
+EnvironmentFile=@ETC@/mailer.env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/env TEAM_MAILER_ENABLED=1
+ExecStart=/usr/bin/python3 -m agent_team mailer
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@DATA@
+
+[Install]
+WantedBy=multi-user.target

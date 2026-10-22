@@ -1,0 +1,17 @@
+[Unit]
+Description=agent-team dispatcher (wakes agents when they have mail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agents
+UMask=0007
+EnvironmentFile=@ETC@/env
+EnvironmentFile=-@ETC@/dispatcher.env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/env
+ExecStart=/usr/bin/python3 -m agent_team dispatcher
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

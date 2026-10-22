@@ -1,0 +1,21 @@
+[Unit]
+Description=agent-team Discord bot (optional)
+After=network-online.target
+
+[Service]
+User=teambot
+UMask=0007
+EnvironmentFile=@ETC@/env
+EnvironmentFile=@ETC@/discord.env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/env TEAM_DISCORD_ENABLED=1
+# needs: pip install discord.py (e.g. in a venv; change the python path below)
+ExecStart=/usr/bin/python3 -m agent_team discord-bot
+Restart=always
+RestartSec=15
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@DATA@
+
+[Install]
+WantedBy=multi-user.target

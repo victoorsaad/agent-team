@@ -163,14 +163,14 @@ For real runs: log in to Claude Code (`claude setup-token` or an API key), point
 session (`python3 -m agent_team mcp-config --as ana` prints the MCP entry; then "ask ops …", "what did the team do
 today?"), or from Discord or Slack.
 
-**Slack in five steps:** create an app (from scratch) in your workspace; add the bot scopes `chat:write`,
+**Slack in five steps** (beta: covered by tests against a fake API, not yet run in a real workspace): create an app (from scratch) in your workspace; add the bot scopes `chat:write`,
 `chat:write.customize`, `channels:history`, `files:read`, `files:write`, `reactions:write`, `users:read`; either
 enable Socket Mode (an app-level token with `connections:write` → `SLACK_APP_TOKEN`) or set the Events API Request
 URL to `https://<your host>/slack/events` (→ `SLACK_SIGNING_SECRET`); subscribe to `message.channels`; install it, invite
 the bot to the channel, and set `SLACK_BOT_TOKEN`, `SLACK_CHANNEL` and `TEAM_SLACK_USERS` (`U…:ana,U…:leo`). Then
 `"chat": {"provider": "slack"}` and `agent-team slack-bot`.
 
-**Notion in three steps:** create an internal integration (→ `NOTION_TOKEN`), share with it the pages the team may
+**Notion in three steps** (beta, same caveat): create an internal integration (→ `NOTION_TOKEN`), share with it the pages the team may
 read and the page (or database) where daily notes go, and put their ids in `knowledge.read` and
 `knowledge.daily_parent` (or `daily_database`).
 

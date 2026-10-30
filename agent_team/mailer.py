@@ -5,8 +5,9 @@ Agents can write to the mailbox, so a row marked "approved" proves nothing by it
 checks, out of band, that a human approved this exact email (same recipient, subject and body as when it was shown):
 - approved with `agent-team approve <id>`: an HMAC of (id, code) made with TEAM_APPROVAL_SECRET, which agents must
   not be able to read (run agents as another OS user; see SECURITY.md);
-- approved in the Discord thread: the mailer reads that message from Discord itself and checks its author is a human
-  in TEAM_DISCORD_USERS, that it says "approve" and that the email (with its code) was shown before it.
+- approved in the chat thread (Discord or Slack): the mailer reads that message from the chat itself and checks its
+  author is a listed human (TEAM_DISCORD_USERS / TEAM_SLACK_USERS), that it says "approve" and that the email (with its
+  code) was shown in that thread before it.
 Then it sends through SMTP, at most MAILER_DAILY a day, optionally only inside MAILER_WINDOW hours (MAILER_TZ).
 
 With MAILER_CHECK_HOSTS (your own site, e.g. shop.example.com), every link in the body to one of those hosts must
@@ -14,7 +15,6 @@ exist: a 404 or 410 rejects the email (an agent stitched a link together), a 5xx
 for the next round (the site is restarting). A reply ("Re: <subject>") may only carry links the first email to that
 person already had."""
 import hmac
-import json
 import re
 import smtplib
 import ssl
@@ -24,7 +24,7 @@ import urllib.request
 from datetime import datetime
 from email.message import EmailMessage
 
-from . import config, notify, store
+from . import chat, config, notify, store
 
 try:
     from zoneinfo import ZoneInfo
@@ -43,13 +43,6 @@ def in_window(now=None):
     return (now.weekday() < 5 or not weekdays_only) and lo <= now.hour < hi
 
 
-def discord_get(path):
-    req = urllib.request.Request("https://discord.com/api/v10" + path, headers={
-        "Authorization": "Bot " + config.setting("DISCORD_BOT_TOKEN"), "User-Agent": "agent-team-mailer/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read() or b"{}")
-
-
 def verify(c, row):
     """None when the approval holds, else why not."""
     if row["code"] != store.email_code(row["to_email"], row["subject"], row["body"]):
@@ -62,18 +55,12 @@ def verify(c, row):
         if not hmac.compare_digest(ref, store.approval_sig(secret, row["id"], row["code"])):
             return "the approval signature doesn't match"
         return None
-    if row["approved_by"] == "discord" and config.flag("TEAM_DISCORD_ENABLED"):
-        humans = {p.split(":", 1)[0].strip() for p in config.setting("TEAM_DISCORD_USERS").split(",") if ":" in p}
+    p = chat.provider()
+    if p and row["approved_by"] == p.name:
         d = c.execute("SELECT external FROM chat_threads WHERE thread = ?", (row["thread"],)).fetchone()
         if not d or not ref:
             return "no chat thread or approval message"
-        msg = discord_get("/channels/%s/messages/%s" % (d["external"], ref))
-        if msg.get("author", {}).get("id") not in humans or not store.APPROVE_RE.match(msg.get("content") or ""):
-            return "the approval isn't a human's \"approve\""
-        before = discord_get("/channels/%s/messages?before=%s&limit=50" % (d["external"], ref))
-        if not any("code %s" % row["code"] in (m.get("content") or "") for m in before):
-            return "the email wasn't shown in the thread before the approval"
-        return None
+        return p.verify_approval(d["external"], ref, row["code"])
     return "no verifiable approval"
 
 

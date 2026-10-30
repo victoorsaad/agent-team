@@ -1,0 +1,19 @@
+[Unit]
+Description=agent-team dispatcher for team %i (one team.json and data dir per instance)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agents
+UMask=0007
+# @ETC@/teams/%i.env sets at least TEAM_CONFIG, TEAM_DATA_DIR, TEAM_WORKDIR and TEAM_OFFICE_PORT for this team.
+EnvironmentFile=@ETC@/env
+EnvironmentFile=@ETC@/teams/%i.env
+EnvironmentFile=-@ETC@/dispatcher.env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/teams/%i.env
+ExecStart=/usr/bin/python3 -m agent_team dispatcher
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

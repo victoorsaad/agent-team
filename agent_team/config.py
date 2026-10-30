@@ -102,6 +102,19 @@ class Team:
         self.merge_gate = raw.get("merge_gate")
         self.retro = raw.get("retro")
         self.decision_kinds = raw.get("decision_kinds") or ["pr", "spend", "legal", "other"]
+        # v0.3, each optional
+        self.chat = raw.get("chat") or {}
+        self.knowledge = raw.get("knowledge") or {}
+        self.models = raw.get("models") or {}
+        self.review = raw.get("review") or {}
+        self.prompt_eval = raw.get("prompt_eval")
+        self.deploy = raw.get("deploy")
+        self.conflicts = raw.get("conflicts")
+        self.north = raw.get("north")
+        self.alerts = raw.get("alerts") or {}
+        self.stand_ins = raw.get("stand_ins") or {}
+        self.jobs_off = set(raw.get("jobs_off") or [])
+        self.backup = raw.get("backup", {"keep": 7})
         self.validate()
 
     # ---- lookups -------------------------------------------------------------------------------------------------
@@ -109,6 +122,24 @@ class Team:
     def members(self):
         """Everyone who can receive a message: agents first, then humans."""
         return list(self.roles) + list(self.humans)
+
+    def who(self, member):
+        """The member a message is really for: itself, or the teammate that stands in for a role this team doesn't have
+        (stand_ins: {"designer": "dev"}). Lets shared prompts and routines name roles a smaller team folds together."""
+        return self.stand_ins.get(member, member)
+
+    def chat_provider(self):
+        """"discord", "slack" or None. team.json chat.provider wins; a v0.2 install with TEAM_DISCORD_ENABLED=1 and no
+        chat block keeps Discord."""
+        if flag("TEAM_EVAL"):   # a prompt eval never reaches the chat
+            return None
+        p = self.chat.get("provider")
+        if p:
+            return None if p == "none" else p
+        return "discord" if flag("TEAM_DISCORD_ENABLED") else None
+
+    def job_on(self, name):
+        return name not in self.jobs_off
 
     @property
     def primary_human(self):
@@ -181,8 +212,10 @@ class Team:
 
     def public(self):
         """What the office screen needs (no prompts)."""
+        o = self.office
         return {
-            "name": self.name, "language": self.language,
+            "name": self.name, "language": self.language, "title": o.get("title") or self.name,
+            "back": o.get("back"), "sign": o.get("sign"),
             "agents": [{"id": k, "name": v.get("name", k), "summary": v.get("summary", ""), "room": v.get("room"),
                         "color": v.get("color")} for k, v in self.roles.items()],
             "humans": [{"id": k, "name": v.get("name", k), "summary": v.get("summary", ""), "color": v.get("color")}
@@ -221,6 +254,32 @@ class Team:
                 raise ConfigError("merge_gate.sensitive_paths: bad pattern %r (%s)" % (p, e))
         if self.heartbeat and self.heartbeat.get("when", "always") not in ("always", "backlog"):
             raise ConfigError("heartbeat.when must be 'always' or 'backlog'")
+        prov = self.chat.get("provider")
+        if prov and prov not in ("discord", "slack", "none"):
+            raise ConfigError("chat.provider must be 'discord', 'slack' or 'none'")
+        kp = self.knowledge.get("provider")
+        if kp and kp not in ("markdown", "notion"):
+            raise ConfigError("knowledge.provider must be 'markdown' or 'notion'")
+        if kp == "markdown" and not (self.knowledge.get("path") or setting("TEAM_KNOWLEDGE_PATH")):
+            raise ConfigError("knowledge (markdown) needs a path (team.json knowledge.path or TEAM_KNOWLEDGE_PATH)")
+        for k, v in self.stand_ins.items():
+            if v not in self.roles:
+                raise ConfigError("stand_ins: %r stands in for %r but isn't a role" % (v, k))
+        if self.north and self.north.get("agent", self.orchestrator) not in self.roles:
+            raise ConfigError("north points to unknown agent %r" % self.north.get("agent"))
+        if self.prompt_eval is not None and self.merge_gate is None:
+            raise ConfigError("prompt_eval runs inside the merge gate: add merge_gate")
+        for key, block in (("prompt_eval", self.prompt_eval), ("review", self.review), ("deploy", self.deploy)):
+            for field in ("paths", "light_paths", "locked", "skip_paths"):
+                pat = (block or {}).get(field)
+                if pat:
+                    try:
+                        re.compile(pat)
+                    except re.error as e:
+                        raise ConfigError("%s.%s: bad pattern %r (%s)" % (key, field, pat, e))
+        if self.north:
+            if not re.fullmatch(r"\d{1,2}:\d{2}", str(self.north.get("at", "09:15"))):
+                raise ConfigError("north.at must look like \"09:15\"")
         for a in self.approvers():
             if a not in self.humans:
                 raise ConfigError("approver %r is not a human" % a)

@@ -39,13 +39,28 @@ The defenses below limit **what the tools allow** and put a human in front of an
 - **No secrets in messages.** Files an agent attaches are checked (no dotfiles, `.env`, keys, credentials; only under
   the work dir, the team's files or `/tmp`). The office masks token-looking strings in what it shows.
 - **The office** binds to `127.0.0.1`; remote access needs `TEAM_OFFICE_TOKEN` or an authenticating proxy.
+- **Chat (v0.3).** Agents' text never pings anyone by itself: Discord posts allow mentions only of the humans the code
+  chose, and on Slack `<!channel>`, `<!here>` and `<@…>` in an agent's text are defused before posting. Only listed
+  chat users are heard. On Slack the posting token (SLACK_BOT_TOKEN) is a bot token: messages it posts carry a
+  `bot_id`, so an agent that gets hold of it still can't post an approval as a human (the mailer checks the
+  approval's `user` and that it isn't a bot). The Events API endpoint refuses requests without a valid signature or
+  older than 5 minutes, and repeated events are dropped.
+- **Knowledge (v0.3).** Agents read notes only through `notes_read` / `notes_search`, confined to the notes folder
+  (Markdown) or to the pages shared with the integration (Notion). Nothing an agent writes reaches the notes: the
+  daily note is assembled by code from the mailbox. Give the Notion integration access only to what the team may read.
+- **Prompt evals (v0.3).** Eval runs get a throwaway mailbox, no chat, mailer or GitHub, an environment stripped of
+  anything that looks like a token, key or secret (Claude's own auth excepted) and a git that can't push. They still
+  run real agents with the tools their roles allow, on a checkout of the PR: run the dispatcher in a sandbox.
+- **Post-deploy reverts (v0.3)** only undo: a revert PR is marked ok for the gate because it restores what was live,
+  and a revert is never reverted automatically.
 
 ## What you must do
 
 1. **Sandbox the agents.** Run the dispatcher (and so every agent) as its own OS user, ideally in a container or VM,
    with only the repository it works on. If you use `bypassPermissions`, the sandbox is the only boundary.
-2. **Keep secrets out of the agents' reach.** `TEAM_APPROVAL_SECRET`, SMTP and Discord credentials belong to the
-   mailer/bot users, not to the agents' user. The mailbox (SQLite) is **not** an auth boundary: anything that can open
+2. **Keep secrets out of the agents' reach.** `TEAM_APPROVAL_SECRET`, SMTP credentials, the Discord bot token and
+   the Slack app/signing secrets belong to the mailer/bot users, not to the agents' user (the chat mirror runs inside
+   agents' runs, so its webhook / bot token is the one chat credential they can reach; scope it to one channel). The mailbox (SQLite) is **not** an auth boundary: anything that can open
    the file can write to it, and an agent with a shell can start the MCP server as a human. That's why e-mail
    approvals are verified out of band; do the same for any new side effect you add.
 3. **Give read-only access to data.** If agents need production data, give them a read-only role with no personal
@@ -55,7 +70,8 @@ The defenses below limit **what the tools allow** and put a human in front of an
    list those paths in `merge_gate.sensitive_paths`, and remove merge rights from the agents' GitHub token so the gate
    is the only way in.
 6. **The retro reads the whole mailbox** (read-only), including proposed emails. Give that role only `sqlite3
-   -readonly` and the repository, and keep its changes behind a human's approval (the example does both).
+   -readonly` and the repository, and keep its changes behind a human's approval, or (with `retro.self_merge`) behind
+   the reviewer, the prompt eval and `prompt_eval.locked` for the rules only a human changes.
 
 ## Reporting a vulnerability
 

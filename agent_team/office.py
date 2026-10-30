@@ -5,6 +5,10 @@ Access, in order: localhost always; with TEAM_OFFICE_TOKEN set, a request carryi
 behind an authenticating proxy (Cloudflare Access, oauth2-proxy…), a request from TEAM_OFFICE_TRUSTED_PROXIES whose
 TEAM_OFFICE_EMAIL_HEADER is in TEAM_OFFICE_EMAILS. Binds to 127.0.0.1 by default.
 
+Per team (team.json office): `title`, `back` ({"href", "label"}: a link to the page that embeds it), `prefix` (also
+served under that path, e.g. "/office", for a proxy that routes it next to other pages) and `css` (the page's color
+and font variables, e.g. {"bg": "#101820", "text": "#eef"}), so several teams on one host each get their own office.
+
 `--replay file.json` plays a scripted, made-up conversation into a throwaway database, for demos."""
 import hmac
 import json
@@ -12,12 +16,26 @@ import os
 import tempfile
 import threading
 import time
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import config, store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def page():
+    """office.html with this team's title and colors inline (team.json office), so the first paint is already right."""
+    o = config.team().office
+    with open(os.path.join(HERE, "office.html"), encoding="utf-8") as f:
+        html = f.read()
+    css = "".join("--%s:%s;" % (k, v) for k, v in (o.get("css") or {}).items()
+                  if str(k).replace("-", "").isalnum() and not any(ch in str(v) for ch in "<>{};"))
+    if css:
+        html = html.replace("</head>", "<style>:root{%s}</style>\n</head>" % css, 1)
+    html = html.replace("<title>Agent Office</title>", "<title>%s</title>" % escape(o.get("title") or config.team().name), 1)
+    return html.encode()
 
 
 def snapshot(c=None):
@@ -111,13 +129,20 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed():
             return self.reply(403, b"forbidden", "text/plain")
         path = urlparse(self.path).path
+        prefix = "/" + (config.team().office.get("prefix") or "").strip("/")
+        if prefix != "/" and (path == prefix or path.startswith(prefix + "/")):
+            path = path[len(prefix):] or "/"
+            if path == "/" and not urlparse(self.path).path.endswith("/"):   # relative api/ links need the slash
+                self.send_response(301)
+                self.send_header("location", prefix + "/")
+                self.end_headers()
+                return
         if path == "/api/state":
             return self.reply(200, json.dumps(snapshot()).encode(), "application/json")
         if path == "/api/team":
             return self.reply(200, json.dumps(config.team().public()).encode(), "application/json")
         if path in ("/", "/index.html"):
-            with open(os.path.join(HERE, "office.html"), "rb") as f:
-                return self.reply(200, f.read(), "text/html; charset=utf-8")
+            return self.reply(200, page(), "text/html; charset=utf-8")
         self.reply(404, b"not found", "text/plain")
 
     def log_message(self, *a):

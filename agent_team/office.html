@@ -52,6 +52,7 @@
   .chip.off i { background: #f87171; }
   .grow { flex: 1; }
   button.chip { cursor: pointer; }
+  a.chip { text-decoration: none; }
   button.chip[aria-pressed="true"], button.chip[aria-expanded="true"] { border-color: var(--line); }
   button.chip:focus-visible, .seg button:focus-visible { outline: 2px solid var(--line); outline-offset: 2px; }
   .panel { background: var(--glass); border: 1.5px solid var(--line); border-radius: 14px; padding: 12px 14px; box-shadow: 0 8px 30px rgba(0,0,0,.35); backdrop-filter: blur(6px); }
@@ -114,6 +115,7 @@
 <body>
 <div id="scene"></div>
 <div class="hud top">
+  <a class="chip hidden" id="back" href="/">← <span></span></a>
   <div class="logo" id="logo">…</div>
   <span class="chip" id="c-live"><i></i><span data-t="live"></span></span>
   <span class="chip" id="c-busy">…</span>
@@ -155,7 +157,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 
 // ---------- the team (from /api/team) and the UI language ----------
-const TEAM = await fetch("/api/team", {cache: "no-store"}).then(r => r.json());
+const TEAM = await fetch("api/team", {cache: "no-store"}).then(r => r.json());
 const L = {
   en: {live: "live", offline: "offline", replay: "replay (scripted demo)", spin: "Auto-rotate", stop: "Stop rotating", center: "Center",
        panel: "Panel", convs: "Conversations", doneTab: "Done today", costTab: "Cost per conversation",
@@ -184,8 +186,12 @@ const lang = new URLSearchParams(location.search).get("lang") || TEAM.language |
 const T = L[lang] || L.en;
 document.documentElement.lang = lang === "pt" ? "pt-BR" : lang;
 document.querySelectorAll("[data-t]").forEach(el => { el.textContent = T[el.dataset.t]; });
-document.getElementById("logo").textContent = TEAM.name;
-document.title = TEAM.name + " · office";
+document.getElementById("logo").textContent = TEAM.title || TEAM.name;
+document.title = (TEAM.title || TEAM.name) + " · office";
+if (TEAM.back && TEAM.back.href) {   // team.json office.back: a link back to the page that embeds the office
+  const b = document.getElementById("back");
+  b.href = TEAM.back.href; b.querySelector("span").textContent = TEAM.back.label || "Back"; b.classList.remove("hidden");
+}
 const LOCALE = lang === "pt" ? "pt-BR" : undefined;
 
 const PALETTE = [0xf0a43a, 0x2fa7d8, 0x8b6cf0, 0x2fb37a, 0x14b8a6, 0xf0675a, 0xe0559b, 0x4b86e8, 0xc084fc, 0x84cc16];
@@ -572,7 +578,7 @@ animate();
 async function tick() {
   const live = document.getElementById("c-live");
   try {
-    const r = await fetch("/api/state", {cache: "no-store"});
+    const r = await fetch("api/state", {cache: "no-store"});
     if (!r.ok) throw new Error(r.status);
     render(await r.json());
     live.classList.remove("off"); live.querySelector("span").textContent = T.live;

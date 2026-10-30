@@ -8,6 +8,8 @@ import hmac
 import os
 import re
 import sqlite3
+import sys
+import tempfile
 import time
 
 from . import config, notify
@@ -69,14 +71,35 @@ SECRET_RE = re.compile(r"(^|/)(\.[^/]*|env|[^/]*\.(key|pem|p12|pfx|der|env)|id_[
 
 def db(path=None):
     path = path or config.db_path()
+    if "unittest" in sys.modules and not config.flag("TEAM_TESTS_REAL_DB"):
+        # A test run on the server (TEAM_DB already pointing at the real file) must never write the team's mailbox.
+        tmp = (os.path.realpath(tempfile.gettempdir()), os.path.realpath("/tmp"))
+        if not os.path.realpath(os.path.abspath(path)).startswith(tmp):
+            raise RuntimeError("tests must not open a real team database (%s): set TEAM_DB under %s" % (path, tmp[0]))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     c = sqlite3.connect(path, timeout=30, isolation_level=None, check_same_thread=False)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
-    if "origin" not in {r[1] for r in c.execute("PRAGMA table_info(runs)")}:   # mailboxes from v0.1
-        c.execute("ALTER TABLE runs ADD COLUMN origin TEXT")
+    cols = {r[1] for r in c.execute("PRAGMA table_info(runs)")}
+    for col in ("origin", "model"):   # mailboxes from v0.1 / v0.2
+        if col not in cols:
+            c.execute("ALTER TABLE runs ADD COLUMN %s TEXT" % col)
     return c
+
+
+def backup(c, folder=None, keep=7):
+    """A consistent copy of the mailbox (SQLite's online backup) as backups/team-YYYY-MM-DD.db, keeping the last `keep`."""
+    folder = folder or os.path.join(os.path.dirname(config.db_path()), "backups")
+    os.makedirs(folder, exist_ok=True)
+    out = sqlite3.connect(os.path.join(folder, "team-%s.db" % time.strftime("%Y-%m-%d")))
+    try:
+        c.backup(out)
+    finally:
+        out.close()
+    for old in sorted(f for f in os.listdir(folder) if f.startswith("team-") and f.endswith(".db"))[:-keep]:
+        os.remove(os.path.join(folder, old))
+    return folder
 
 
 def state(c, k, v=None):
@@ -130,9 +153,11 @@ def shown(sender, recipient):
     return sender != "system" and not t.is_human(sender) and t.is_human(recipient)
 
 
-def send(c, sender, recipient, kind, body, reply_to=None, mirror=True, thread=None, files=None):
-    """One message. `thread` (or `reply_to`) keeps it in an existing conversation; otherwise it starts one."""
+def send(c, sender, recipient, kind, body, reply_to=None, mirror=True, thread=None, files=None, urgent=False):
+    """One message. `thread` (or `reply_to`) keeps it in an existing conversation; otherwise it starts one. In the
+    chat it @mentions the human it's addressed to when it asks or answers something (notify.pings); `urgent` too."""
     t = config.team()
+    recipient = t.who(recipient)
     if recipient not in t.members:
         raise ValueError("Unknown teammate %r. The team: %s" % (recipient, ", ".join(t.members)))
     if reply_to:
@@ -147,7 +172,8 @@ def send(c, sender, recipient, kind, body, reply_to=None, mirror=True, thread=No
         c.execute("UPDATE messages SET thread = ? WHERE id = ?", (mid, mid))
     if mirror and shown(sender, recipient):
         title = body if thread == mid else c.execute("SELECT body FROM messages WHERE id = ?", (thread,)).fetchone()["body"]
-        notify.post(c, body, who=t.display(sender), thread=thread, title=title, own=kind == "approval", files=files)
+        notify.post(c, body, who=t.display(sender), thread=thread, title=title, own=kind == "approval", files=files,
+                    ping=notify.pings(recipient, kind, force=urgent))
     return mid
 
 
@@ -181,6 +207,27 @@ def did(c, agent, text, proof=None, thread=None):
                   (time.time(), agent, origin_of(c, thread), " ".join(text.split())[:300], proof, thread))
     except sqlite3.Error as e:
         print("done", repr(e)[:200], flush=True)
+
+
+def alert_thread(c, tid):
+    """A conversation opened by an external monitor's alert (chat bot, `agent-team alert`): the orchestrator's answer
+    goes to the humans in that thread instead of being an automatic task nobody reads."""
+    return bool(tid) and state(c, "alert:%s" % tid) == "1"
+
+
+def open_alert(c, text):
+    """An alert from a monitor → a task for the orchestrator (alerts.agent), in a conversation of its own."""
+    t = config.team()
+    agent = t.alerts.get("agent") or t.orchestrator
+    mid = send(c, "system", agent, "task", ALERT_TASK % text.strip()[:6000], mirror=False)
+    state(c, "alert:%d" % mid, 1)
+    return mid
+
+
+ALERT_TASK = """Alert from a monitor:
+%s
+Check it (is it real, since when, who owns it). Fix what's yours or `assign` the owner. Then `reply` to this message in
+two or three lines: what it was and what happens now. Your reply goes to the humans in the alert's chat thread."""
 
 
 # ---- decisions: what waits for a human ------------------------------------------------------------------------------

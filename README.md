@@ -28,8 +28,10 @@ are actually theirs. A 3D "office" shows who is working on what.
   feed or this command's output become a task" (changelogs, error logs, new support tickets).
 - **Human approval**: the rules go into every agent's prompt; `request_approval` reaches the humans; outgoing e-mail is
   enforced by a separate mailer that verifies the approval out of band.
-- **Optional integrations, off by default**: Discord (humans talk to the team in a channel, one thread per
-  conversation), e-mail over SMTP, GitHub PR review queue and merge gate.
+- **Pluggable integrations, off by default**: chat on **Discord or Slack** (humans talk to the team in a channel,
+  one thread per conversation, @mentions when an agent needs them), knowledge in a **Markdown folder (an Obsidian
+  vault works) or Notion** (agents read the humans' notes, the team writes a note a day back), e-mail over SMTP,
+  GitHub PR review queue, merge gate, deploy train and post-deploy checks.
 - **The office** (Three.js): agents walk to their desks when they have work, envelopes fly between them, they go back
   to the kitchen when done. A "Done today" tab lists what got done and why (asked by a human, routine, initiative).
   A **replay** mode plays a scripted conversation for demos.
@@ -52,9 +54,34 @@ Each feature below is off until its key is in `team.json`; the example turns the
 | `retro` | `{"agent", "days": [0], "at": "08:30", "max_changes": 3, "notes_dir"}`: a weekly task with the data to read (the mailbox, read-only) and what to measure (receipts, promises, approvals, cost per result), at most N changes by PR, each waiting for a human, never touching the `locks`. |
 
 The humans can also answer from the command line: `agent-team decisions`, `agent-team decide <id> approve|reject`,
-`agent-team promises`. With Discord, a plain "approve" in a thread where a PR (or any decision) and emails both wait
+`agent-team promises`. In the chat, a plain "approve" in a thread where a PR (or any decision) and emails both wait
 approves no email: the bot says it's ambiguous and the orchestrator asks; "approve the emails" or the email numbers do
 it, and bare numbers count only when they are pending email ids.
+
+## v0.3: integrations and shipping (optional)
+
+Each block below is off until its key is in `team.json`; the tea-shop example turns them on. Secrets only ever come
+from the environment (see `.env.example`).
+
+| Key | What it does |
+|---|---|
+| `chat` | `{"provider": "discord" \| "slack" \| "none", "mention": true}`. Same behavior on both: what agents say to a human shows up in one thread per conversation (the team's own initiatives share one thread a day), posted under the agent's name; a human is @mentioned when a message asks or answers them (status updates don't ping); approvals in a thread are re-read from the chat's API by the mailer before an email leaves. Discord: webhook + bot (`agent-team discord-bot`, needs `discord.py`). Slack: a bot token, and `agent-team slack-bot` over Socket Mode (`slack_sdk`, no public URL) or the Events API (standard library, signed requests only). |
+| `knowledge` | `{"provider": "markdown", "path", "read", "daily_dir", "git"}` or `{"provider": "notion", "read", "daily_parent" \| "daily_database"}`. The `read` notes go into every agent's instructions; `notes_search` / `notes_read` find the rest. At `daily_at` (23:50) the dispatcher writes the day's note (done, decided, waiting, promises, cost) from the tables; with `git: true` it commits and pushes that file alone. `agent-team daily-note --print` shows it. |
+| `models` | `{"human": "<model>", "light_review": "<model>", "human_except": [...]}`: the strong model for conversations a human started, a cheaper one for reviews that only touch `review.light_paths`; otherwise each role's own `model`. The model of every run is recorded. |
+| `review` | `{"guide": "REVIEW.md", "max_rounds": 3, "overlap": true, "light_paths", "skip_branches", "fallback_owner"}`. After round 1 the reviewer looks only at what changed since its last block; at the cap it stops listing lines and sends the author back to the approach. A PR touching most of the same files as an open PR or one merged in the last day is flagged as a likely duplicate or fix-of-a-fix. |
+| `prompt_eval` | Needs `merge_gate`. A PR that changes prompts (`paths`) runs real agents on real situations (`cases`, a JSON file in the repo) in a sandbox, on the PR and on the base: a case that passes on the base and fails on the PR blocks the merge and goes back to the author. Incident cases (`"score": true`) run 3x and report a score when the reviewer's own prompt changes. A changed line matching `locked` needs a human. See `agent_team/evals.py`. |
+| `retro.self_merge` | With `prompt_eval`: the retro's PRs merge like any other (reviewer + eval) instead of each waiting for a human; locked rules still ask one. |
+| `north` | `{"days": [0], "at": "09:15", "agent"}`: weekly, the orchestrator measures last week's goals and sets 1-3 for this one (`set_north`). Every run sees them; work the team starts on its own must say which goal it serves or stop ("off north"), maintenance excepted (`"maintenance": true` on a routine or trigger). |
+| `deploy` | `{"workflow": "deploy.yml", "every_min": 30, "skip_paths"}` batches deploys (at once for a revert or a PR a human waits for; never for docs only), or `"on_merge": true` when the platform deploys every merge. `verify`: `after_min` after each deploy the `site`'s `paths` and the pages the deploy changed (`page_map`) must answer and `logs_command` must show no new error shape; broken → a revert PR the gate merges on green, the evidence to the author, the humans @mentioned if the site is down. A promise that `depends` on `pr:<n>` closes when it's deployed. |
+| `conflicts` | `{"close_after_h": 24, "union_files": ["CHANGELOG.md"], "check": [...]}`: a conflicting PR gets a rebase task for its author once per commit; conflicts only in `union_files` are resolved by the dispatcher itself (both sides kept, `check` run, force-with-lease); 24 h later on the same commit the PR is closed, branch kept. |
+| `alerts` | `{"names": ["Uptime monitor"], "agent": "ops"}`: a webhook or bot with that name posting in the channel (or `agent-team alert "…"` from a cron job) opens a task for the orchestrator, whose reply goes back to the humans in that thread. |
+| `stand_ins` | `{"designer": "marketing"}`: messages and routines for a role this team doesn't have go to the one that covers it, so several teams can share prompts and routines. |
+| `jobs_off`, `backup`, `office` | Turn dispatcher jobs off by name; keep N daily copies of the mailbox (`backup.keep`, default 7); per-team office `title`, `back` link, `prefix` and `css` colors. |
+
+**More than one team on a host:** one `team.json`, data dir and office port per team, and the templated units
+`agent-team-dispatcher@<team>` / `agent-team-office@<team>` (each reads `/etc/agent-team/teams/<team>.env`).
+
+**Tests never touch a real mailbox:** under `unittest`, opening a database outside the temp dir raises.
 
 ## Architecture
 
@@ -63,7 +90,7 @@ flowchart LR
   subgraph Humans
     H1[CLI: agent-team send / approve]
     H2[Own Claude Code session<br/>MCP team --as human]
-    H3[Discord channel<br/>optional]
+    H3[Discord or Slack channel<br/>optional]
   end
   subgraph Server
     DB[(SQLite mailbox<br/>messages · runs · outbox<br/>decisions · promises · done)]
@@ -71,7 +98,7 @@ flowchart LR
     D[Dispatcher<br/>caps · routines · triggers · PR queue<br/>merge gate · promises · digest · retro]
     O[Office<br/>HTTP + Three.js]
     M[Mailer<br/>optional, own user]
-    B[Discord bot<br/>optional, own user]
+    B[Chat bot<br/>optional, own user]
   end
   C1[claude -p<br/>ops]:::agent
   C2[claude -p<br/>dev]:::agent
@@ -102,14 +129,17 @@ handles one conversation and ends; answers wake whoever is waiting.
 | `agent_team/office.py`, `office.html` | the office (HTTP + Three.js) and its access rules |
 | `agent_team/replay.py` | plays a scripted conversation into a throwaway database |
 | `agent_team/mailer.py` | optional: sends human-approved e-mail over SMTP |
-| `agent_team/discord_bot.py`, `notify.py` | optional: Discord bot and mirror |
+| `agent_team/notify.py`, `agent_team/chat/` | the chat mirror and its providers (`discord.py`, `slack.py`), the bots (`discord_bot.py`, `slack_bot.py`) and their shared rules (`inbound.py`) |
+| `agent_team/knowledge/`, `daily.py` | the notes providers (`markdown.py`, `notion.py`) and the daily note |
+| `agent_team/ship.py` | after the merge: deploy train, post-deploy verification and revert, conflicts |
+| `agent_team/evals.py` | prompt evals (`agent-team eval`) |
 | `examples/tea-shop/` | the fictional example team: `team.json`, prompts, `TEAM.md`, `replay.json` |
 | `deploy/` | example systemd install (separate OS users per service) |
 
 ## Run it locally
 
 Requirements: Python 3.9+ (standard library only), and [Claude Code](https://docs.claude.com/en/docs/claude-code)
-for real runs. `discord.py` only if you enable the Discord bot.
+for real runs. `discord.py` only for the Discord bot, `slack_sdk` only for Slack's Socket Mode.
 
 ```bash
 git clone <this repository> agent-team && cd agent-team
@@ -131,7 +161,18 @@ python3 -m agent_team office                # live office on the real mailbox
 For real runs: log in to Claude Code (`claude setup-token` or an API key), point `TEAM_WORKDIR` to your project, set
 `TEAM_DRY_RUN=0`, and start the dispatcher. Talk to the team with `agent-team send`, from your own Claude Code
 session (`python3 -m agent_team mcp-config --as ana` prints the MCP entry; then "ask ops …", "what did the team do
-today?"), or from Discord.
+today?"), or from Discord or Slack.
+
+**Slack in five steps:** create an app (from scratch) in your workspace; add the bot scopes `chat:write`,
+`chat:write.customize`, `channels:history`, `files:read`, `files:write`, `reactions:write`, `users:read`; either
+enable Socket Mode (an app-level token with `connections:write` → `SLACK_APP_TOKEN`) or set the Events API Request
+URL to `https://<your host>/slack/events` (→ `SLACK_SIGNING_SECRET`); subscribe to `message.channels`; install it, invite
+the bot to the channel, and set `SLACK_BOT_TOKEN`, `SLACK_CHANNEL` and `TEAM_SLACK_USERS` (`U…:ana,U…:leo`). Then
+`"chat": {"provider": "slack"}` and `agent-team slack-bot`.
+
+**Notion in three steps:** create an internal integration (→ `NOTION_TOKEN`), share with it the pages the team may
+read and the page (or database) where daily notes go, and put their ids in `knowledge.read` and
+`knowledge.daily_parent` (or `daily_database`).
 
 **Your own team:** copy `examples/tea-shop/`, edit `team.json` (roles, humans, approval rules, routines, triggers)
 and the prompts, set `TEAM_CONFIG`, and run `agent-team check`. `agent-team prompt <agent>` shows exactly what an
@@ -143,7 +184,8 @@ Read [SECURITY.md](SECURITY.md). In short:
 
 - **Human approval.** Approval rules (and the authority levels) are part of every agent's instructions;
   `request_approval` opens a decision for the humans. E-mail is enforced: the mailer sends only what a human approved,
-  verified with an HMAC (`agent-team approve`) or against Discord's API, and only if the email is unchanged.
+  verified with an HMAC (`agent-team approve`) or against the chat's API (Discord or Slack), and only if the email is
+  unchanged.
 - **The merge gate** is code: the dispatcher never merges around a pending or rejected decision, a red or unfinished
   CI, or a sensitive path without a human's yes. It guards against the team's own mistakes, not against a compromised
   agent: an agent whose GitHub token can merge can still merge by hand. Take merge rights away from the agents' token
@@ -168,8 +210,10 @@ Read [SECURITY.md](SECURITY.md). In short:
   items, refuses the obvious mistakes and keeps the tables. The trust ladder is counted by the retro, not by code.
 - The dry run checks the plumbing, not the agents' judgment. Quality depends on your prompts and playbook.
 - The office loads Three.js and fonts from public CDNs; it needs a browser with WebGL.
-- GitHub integration needs `gh` logged in and only knows PRs and checks. The Discord bot is lightly tested.
-- Early, small codebase (v0.1). Expect breaking changes.
+- GitHub integration needs `gh` logged in and only knows PRs and checks. The chat bots are tested against fakes of
+  the APIs, not against live workspaces; the deploy train and post-deploy checks assume GitHub Actions.
+- Prompt evals spend real Claude runs (a few minutes each) and are noisy; the gate retries a failing case once.
+- Early, small codebase (v0.3). Expect breaking changes.
 
 ## License
 
@@ -204,8 +248,10 @@ pessoas as decisões que são de fato delas. Um "escritório" em 3D mostra quem 
   feed ou na saída deste comando viram tarefa" (changelogs, logs de erro, tickets novos de atendimento).
 - **Aprovação humana**: as regras entram no prompt de todo agente; `request_approval` chega às pessoas; o e-mail que
   sai é garantido por um mailer separado que confere a aprovação por fora.
-- **Integrações opcionais, desligadas por padrão**: Discord (as pessoas falam com o time num canal, uma thread por
-  conversa), e-mail por SMTP, fila de revisão de PRs e portão de merge no GitHub.
+- **Integrações plugáveis, desligadas por padrão**: chat no **Discord ou no Slack** (as pessoas falam com o time num
+  canal, uma thread por conversa, com @menção quando um agente precisa delas), conhecimento numa **pasta de Markdown
+  (um vault do Obsidian serve) ou no Notion** (os agentes leem as notas das pessoas e o time escreve uma nota por dia
+  de volta), e-mail por SMTP, fila de revisão de PRs, portão de merge, trem de deploy e verificação pós-deploy no GitHub.
 - **O escritório** (Three.js): os agentes vão até a mesa quando têm trabalho, envelopes voam entre eles, e voltam para
   a copa quando terminam. A aba "Feito hoje" lista o que foi feito e por quê (a pedido, rotina, iniciativa). O modo
   **replay** reproduz uma conversa roteirizada para demonstração.
@@ -228,11 +274,37 @@ recurso abaixo fica desligado até a chave estar no `team.json`; o exemplo liga 
 | `retro` | `{"agent", "days": [0], "at": "08:30", "max_changes": 3, "notes_dir"}`: uma tarefa semanal com os dados a ler (a caixa, só leitura) e o que medir (recibos, promessas, aprovações, custo por resultado), no máximo N mudanças por PR, cada uma esperando uma pessoa, sem nunca mexer nos `locks`. |
 
 As pessoas também respondem pela linha de comando: `agent-team decisions`, `agent-team decide <id> approve|reject`,
-`agent-team promises`. No Discord, um "aprovo" puro numa thread onde esperam um PR (ou qualquer decisão) e e-mails não
+`agent-team promises`. No chat, um "aprovo" puro numa thread onde esperam um PR (ou qualquer decisão) e e-mails não
 aprova nenhum e-mail: o bot avisa que é ambíguo e o orquestrador pergunta; "aprovo os emails" ou os números dos e-mails
 aprovam, e números soltos só valem quando são ids de e-mails pendentes.
 
 ## Arquitetura
+
+## v0.3: integrações e entrega (opcional)
+
+Cada bloco fica desligado até a chave entrar no `team.json` (a tabela completa está na seção em inglês); o exemplo
+liga todos. Segredos vêm só do ambiente (`.env.example`).
+
+- `chat`: `discord`, `slack` ou `none`. Uma thread por conversa, posts com o nome do agente, @menção da pessoa quando
+  a mensagem pergunta ou responde a ela; o mailer relê a aprovação na API do chat antes de enviar. Slack por Socket
+  Mode (`slack_sdk`, sem URL pública) ou Events API (biblioteca padrão, só requisição assinada): `agent-team slack-bot`.
+- `knowledge`: `markdown` (pasta de notas, vault do Obsidian; `git: true` faz commit e push só da nota do dia) ou
+  `notion` (`NOTION_TOKEN`). As notas de `read` entram nas instruções; `notes_search`/`notes_read` acham o resto; às
+  23h50 o dispatcher escreve a nota do dia a partir das tabelas.
+- `models`: modelo forte em conversa iniciada por pessoa, mais barato em revisão leve; o modelo de cada execução fica
+  registrado.
+- `review`: rodadas de revisão com teto (depois da 1ª, só o que mudou), aviso de PR duplicado ou conserto de conserto,
+  guia `REVIEW.md`.
+- `prompt_eval` (+ `retro.self_merge`): PR que muda prompt roda agentes de verdade em situações reais, no PR e na base;
+  regressão trava o merge; linha que mexe em regra travada pede uma pessoa.
+- `north`: metas da semana definidas pelo orquestrador; trabalho que o time inicia sozinho diz a qual meta serve ou para.
+- `deploy`: trem de deploy em lote (ou `on_merge`), verificação pós-deploy com revert automático e @menção se o site cair.
+- `conflicts`: PR em conflito recebe tarefa de rebase; conflito só no CHANGELOG o dispatcher resolve sozinho; fecha em 24 h.
+- `alerts`, `stand_ins`, `jobs_off`, `backup`, `office`: alertas de monitor viram tarefa do orquestrador com resposta na
+  thread; papel ausente cai em quem o cobre; jobs desligados por nome; cópia diária da caixa; escritório por time.
+
+Mais de um time no mesmo servidor: um `team.json`, uma pasta de dados e uma porta por time, com as units
+`agent-team-dispatcher@<time>` e `agent-team-office@<time>`.
 
 O diagrama está na seção em inglês, acima. Uma mensagem para um agente fica na caixa até o dispatcher rodar
 `claude -p` para ele, com o prompt do papel, o manual do time (`TEAM.md`), as regras de aprovação e a memória do
@@ -242,8 +314,8 @@ resposta acorda quem estava esperando. A tabela de arquivos também está acima.
 
 ## Como rodar local
 
-Requisitos: Python 3.9+ (só biblioteca padrão) e, para execuções de verdade, o Claude Code. `discord.py` só se ligar
-o bot do Discord.
+Requisitos: Python 3.9+ (só biblioteca padrão) e, para execuções de verdade, o Claude Code. `discord.py` só para o
+bot do Discord, `slack_sdk` só para o Socket Mode do Slack.
 
 ```bash
 git clone <este repositório> agent-team && cd agent-team
@@ -265,7 +337,7 @@ python3 -m agent_team office                # escritório ao vivo, na caixa real
 Para valer: faça login no Claude Code (`claude setup-token` ou chave de API), aponte `TEAM_WORKDIR` para o seu
 projeto, `TEAM_DRY_RUN=0` e suba o dispatcher. Fale com o time por `agent-team send`, pela sua própria sessão do
 Claude Code (`python3 -m agent_team mcp-config --as ana` imprime a entrada do MCP; depois "pergunte ao ops …") ou pelo
-Discord. Para usar o time
+Discord ou Slack (o passo a passo do Slack e do Notion está na seção em inglês). Para usar o time
 em português, `"language": "pt"` no `team.json` (mensagens às pessoas e a interface do escritório).
 
 **O seu time:** copie `examples/tea-shop/`, edite o `team.json` e os prompts, aponte `TEAM_CONFIG` e rode
@@ -277,7 +349,7 @@ Leia o [SECURITY.md](SECURITY.md). Em resumo:
 
 - **Aprovação humana.** As regras (e os níveis de alçada) fazem parte das instruções de todo agente;
   `request_approval` abre uma decisão para as pessoas. No e-mail é obrigatório: o mailer só envia o que uma pessoa
-  aprovou, conferido por HMAC (`agent-team approve`) ou pela API do Discord, e só se o e-mail não mudou.
+  aprovou, conferido por HMAC (`agent-team approve`) ou pela API do chat (Discord ou Slack), e só se o e-mail não mudou.
 - **O portão de merge** é código: o dispatcher nunca mergeia passando por cima de uma decisão pendente ou recusada, de
   um CI vermelho ou inacabado, ou de um caminho sensível sem o sim de uma pessoa. Ele protege contra os erros do
   próprio time, não contra um agente comprometido: um agente cujo token do GitHub pode mergear ainda consegue mergear
@@ -302,8 +374,10 @@ Leia o [SECURITY.md](SECURITY.md). Em resumo:
   pendente, recusa os erros óbvios e mantém as tabelas. A escada de confiança é contada pela retro, não por código.
 - O modo seco testa o encanamento, não o julgamento dos agentes. A qualidade depende dos prompts e do manual.
 - O escritório carrega Three.js e fontes de CDNs públicas; precisa de navegador com WebGL.
-- A integração com GitHub precisa do `gh` logado e só conhece PRs e checks. O bot do Discord foi pouco testado.
-- Código pequeno e inicial (v0.1). Espere mudanças incompatíveis.
+- A integração com GitHub precisa do `gh` logado e só conhece PRs e checks. Os bots de chat são testados contra
+  imitações das APIs, não contra workspaces reais; trem de deploy e verificação pós-deploy assumem GitHub Actions.
+- O eval de prompts gasta execuções reais do Claude e tem ruído; o portão repete uma vez o caso que falha.
+- Código pequeno e inicial (v0.3). Espere mudanças incompatíveis.
 
 ## Licença
 

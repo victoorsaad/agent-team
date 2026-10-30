@@ -1,0 +1,21 @@
+[Unit]
+Description=agent-team Slack bot (optional)
+After=network-online.target
+
+[Service]
+User=teambot
+UMask=0007
+EnvironmentFile=@ETC@/env
+EnvironmentFile=@ETC@/slack.env
+Environment=PYTHONUNBUFFERED=1 PYTHONPATH=@APP@ TEAM_ENV_FILE=@ETC@/env
+# Socket Mode (SLACK_APP_TOKEN) needs: pip install slack_sdk. Events API over HTTP (SLACK_SIGNING_SECRET) needs nothing.
+ExecStart=/usr/bin/python3 -m agent_team slack-bot
+Restart=always
+RestartSec=15
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@DATA@
+
+[Install]
+WantedBy=multi-user.target

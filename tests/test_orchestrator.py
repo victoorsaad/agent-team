@@ -18,7 +18,8 @@ os.environ.update({"TEAM_DATA_DIR": TMP, "TEAM_ENV_FILE": os.path.join(TMP, "non
 for k in ("TEAM_DISCORD_ENABLED", "TEAM_MAILER_ENABLED", "TEAM_GITHUB", "TEAM_OFFICE_TOKEN", "MAILER_CHECK_HOSTS"):
     os.environ.pop(k, None)
 
-from agent_team import config, discord_bot, dispatcher, mailer, mcp_server, store  # noqa: E402
+from agent_team import config, dispatcher, mailer, mcp_server, store  # noqa: E402
+from agent_team.chat import inbound  # noqa: E402
 
 
 def fresh_db():
@@ -39,7 +40,11 @@ class UseConfig:
     def __enter__(self):
         os.environ["TEAM_CONFIG"] = self.path
         config.reset()
-        return config.team()
+        try:
+            return config.team()
+        except Exception:
+            self.__exit__()
+            raise
 
     def __exit__(self, *a):
         os.environ["TEAM_CONFIG"] = EXAMPLE
@@ -50,7 +55,8 @@ def legacy_config():
     """The example as it was before the orchestrator: no single door, authority, digest, promises, gate or retro."""
     with open(EXAMPLE) as f:
         raw = json.load(f)
-    for k in ("single_door", "authority", "digest", "promises", "merge_gate", "retro", "decision_kinds", "orchestrator"):
+    for k in ("single_door", "authority", "digest", "promises", "merge_gate", "retro", "decision_kinds", "orchestrator",
+              "chat", "knowledge", "models", "review", "north", "prompt_eval", "deploy", "conflicts", "alerts", "stand_ins"):
         raw.pop(k, None)
     raw["heartbeat"].pop("when")
     raw["roles"] = [r for r in raw["roles"] if r["id"] != "retro"]
@@ -83,7 +89,7 @@ class LegacyConfigTest(unittest.TestCase):
             out = mcp_server.call("request_approval", {"what": "Refund order #1047 in full?"})
             self.assertIn("arrives in your inbox", out)
             tid = c.execute("SELECT thread FROM messages WHERE kind = 'approval'").fetchone()[0]
-            discord_bot.answer(c, "ana", None, "yes", tid)
+            inbound.answer(c, "ana", None, "yes", tid)
             self.assertEqual(c.execute("SELECT recipient FROM messages ORDER BY id DESC").fetchone()[0], "support")
 
 
@@ -178,10 +184,10 @@ class ApprovalTest(unittest.TestCase):
             c.execute("INSERT INTO outbox (agent, thread, to_email, subject, body, code, created_at) VALUES ('marketing', ?, ?, 's', 'b', 'x', ?)",
                       (tid, to, time.time()))
         store.open_decision(c, "reviewer", "pr", "PR #48 touches prices", thread=tid, ref="pr:48", mirror=False)
-        warn, note = discord_bot.approve_emails(c, "approve", tid, "m1")
+        warn, note = inbound.approve_emails(c, "approve", tid, "m1", "discord")
         self.assertIn("ambiguous", note)
         self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE status = 'pending'").fetchone()[0], 2)
-        warn, note = discord_bot.approve_emails(c, "approve the emails", tid, "m2")
+        warn, note = inbound.approve_emails(c, "approve the emails", tid, "m2", "discord")
         self.assertIsNone(warn)
         self.assertIn("2 email(s) approved", note)
         self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE status = 'approved' AND approval_ref = 'm2'").fetchone()[0], 2)
@@ -190,9 +196,9 @@ class ApprovalTest(unittest.TestCase):
         c = fresh_db()
         tid = store.send(c, "ana", "ops", "task", "bundle?")
         store.send(c, "reviewer", "ana", "approval", "merge PR #48?", thread=tid, mirror=False)
-        discord_bot.answer(c, "ana", None, "approve", tid)
+        inbound.answer(c, "ana", None, "approve", tid)
         self.assertEqual(c.execute("SELECT recipient FROM messages ORDER BY id DESC").fetchone()[0], "ops")
-        discord_bot.answer(c, "ana", "marketing", "and the copy?", tid)   # a name still goes straight to it
+        inbound.answer(c, "ana", "marketing", "and the copy?", tid)   # a name still goes straight to it
         self.assertEqual(c.execute("SELECT recipient FROM messages ORDER BY id DESC").fetchone()[0], "marketing")
 
 

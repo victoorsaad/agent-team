@@ -8,3 +8,4 @@ __pycache__/
 *.db-wal
 *.db-shm
 .DS_Store
+examples/tea-shop/notes/Team/Daily/*.md

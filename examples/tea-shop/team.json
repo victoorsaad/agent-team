@@ -81,7 +81,7 @@
 
   "promises": {"require": true, "chase_after_min": 120},
 
-  "retro": {"agent": "retro", "days": [0], "at": "08:30", "max_changes": 3, "notes_dir": "docs/retro"},
+  "retro": {"agent": "retro", "days": [0], "at": "08:30", "max_changes": 3, "notes_dir": "docs/retro", "self_merge": true},
 
   "heartbeat": {
     "agent": "dev", "every_min": 120, "when": "backlog",
@@ -102,6 +102,38 @@
   ],
 
   "office": {
+    "title": "Fern & Kettle · office",
     "rooms": {"back_left": "Workshop", "back_right": "Marketing & Support", "lead": "Ops & Retro", "lounge": "Kitchen", "humans": "Owners"}
-  }
+  },
+
+  "chat": {"provider": "none", "mention": true},
+
+  "knowledge": {"provider": "markdown", "path": "notes", "read": ["Team/Context"], "daily_dir": "Team/Daily",
+                "header": "> Related: [[Context]] · {date}", "daily_at": "23:50", "git": false},
+
+  "models": {"human": "opus", "light_review": "sonnet"},
+
+  "review": {"guide": "REVIEW.md", "max_rounds": 3, "overlap": true, "light_paths": "^(docs/|notes/)|\\.(md|css)$"},
+
+  "north": {"days": [0], "at": "09:15"},
+
+  "prompt_eval": {"config": "examples/tea-shop/team.json", "cases": "examples/tea-shop/evals/cases.json",
+                  "paths": "^examples/tea-shop/(prompts/|TEAM\\.md$|team\\.json$|REVIEW\\.md$)",
+                  "reviewer_paths": "^examples/tea-shop/(prompts/reviewer\\.md|REVIEW\\.md)$",
+                  "locked": "authority|approval|level 2|refund|limit|production|money|price"},
+
+  "deploy": {"workflow": "deploy.yml", "every_min": 30, "skip_paths": "^(docs|notes)/",
+             "verify": {"site": "https://shop.example.com", "after_min": 10, "paths": ["/"],
+                        "page_map": [["src/pages/(.*)\\.tsx", "/\\1"]], "revert_errors": 5,
+                        "logs_command": ["journalctl", "-u", "storefront", "--since", "-1h", "-o", "short-iso", "-p", "err"]}},
+
+  "conflicts": {"close_after_h": 24, "union_files": ["CHANGELOG.md"], "check": ["npm", "test"]},
+
+  "alerts": {"names": ["Uptime monitor"], "agent": "ops"},
+
+  "stand_ins": {"designer": "marketing"},
+
+  "jobs_off": [],
+
+  "backup": {"keep": 7}
 }

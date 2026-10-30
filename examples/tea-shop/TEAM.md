@@ -56,3 +56,10 @@ act on it.
 ## Safety
 - Never print keys, passwords or customers' personal data in team messages.
 - Work only inside the shop's repository and /tmp.
+
+## The owners' notes and the week's north
+- The owners keep notes for the team (`notes/` here; Notion or another folder in your setup). The context page is in
+  your instructions; search the rest with `notes_search` before asking an owner something the notes may answer.
+- Monday morning Ops sets the week's north (`set_north`): 1 to 3 goals with a number and a date. A task the team
+  started on its own says which goal it serves, or stops with `post_update "off north: …"`. Maintenance (an error in
+  production, security, a promise) always goes.

@@ -20,8 +20,17 @@ def cmd_check(a):
         "%02d:%02d" % t.at(t.digest) if t.digest else "off", "on" if t.promises.get("require", t.single_door) else "off",
         "on" if t.merge_gate is not None else "off", t.retro["agent"] if t.retro else "off"))
     print("database: %s" % config.db_path())
-    print("dry run: %s · discord: %s · mailer: %s · github: %s · permission mode: %s" % tuple(
-        ["on" if config.flag(k) else "off" for k in ("TEAM_DRY_RUN", "TEAM_DISCORD_ENABLED", "TEAM_MAILER_ENABLED", "TEAM_GITHUB")]
+    print("chat: %s · knowledge: %s · north: %s · prompt eval: %s · deploy: %s · conflicts: %s" % (
+        t.chat_provider() or "off", t.knowledge.get("provider") or "off", "on" if t.north else "off",
+        "on" if t.prompt_eval is not None else "off",
+        ("on merge" if (t.deploy or {}).get("on_merge") else (t.deploy or {}).get("workflow") or "off") + (" + verify" if (t.deploy or {}).get("verify") else ""),
+        "on" if t.conflicts is not None else "off"))
+    if t.stand_ins:
+        print("stand-ins: %s" % ", ".join("%s → %s" % kv for kv in t.stand_ins.items()))
+    if t.jobs_off:
+        print("jobs off: %s" % ", ".join(sorted(t.jobs_off)))
+    print("dry run: %s · mailer: %s · github: %s · permission mode: %s" % tuple(
+        ["on" if config.flag(k) else "off" for k in ("TEAM_DRY_RUN", "TEAM_MAILER_ENABLED", "TEAM_GITHUB")]
         + [config.setting("TEAM_PERMISSION_MODE", "default")]))
     print("ok")
 
@@ -145,8 +154,44 @@ def cmd_prompt(a):
 
 
 def cmd_discord(a):
-    from . import discord_bot
+    from .chat import discord_bot
     discord_bot.main()
+
+
+def cmd_slack(a):
+    from .chat import slack_bot
+    slack_bot.main()
+
+
+def cmd_alert(a):
+    """An alert from a monitor (cron, uptime check, CI) without a chat: a task for the orchestrator."""
+    mid = store.open_alert(store.db(), a.text)
+    print("alert #%d for %s" % (mid, config.team().alerts.get("agent") or config.team().orchestrator))
+
+
+def cmd_daily_note(a):
+    import datetime as dt
+    from . import daily, dispatcher
+    day = dt.datetime.strptime(a.day, "%Y-%m-%d") if a.day else dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if a.print:
+        title, text = daily.note(store.db(), day)
+        print("# %s\n\n%s" % (title, text))
+    else:
+        print(dispatcher.daily_note(store.db(), day) or "not written (no knowledge provider, or it failed)")
+
+
+def cmd_eval(a):
+    from . import evals
+    raise SystemExit(evals.main(a.rest))
+
+
+def cmd_eval_case(a):
+    from . import evals
+    evals.eval_case(json.loads(a.case), a.max_turns)
+
+
+def cmd_backup(a):
+    print("backup in", store.backup(store.db()))
 
 
 def cmd_mailer(a):
@@ -207,7 +252,23 @@ def main(argv=None):
     s = sub.add_parser("prompt", help="print the system prompt an agent gets")
     s.add_argument("agent")
     s.set_defaults(f=cmd_prompt)
-    sub.add_parser("discord-bot", help="run the optional Discord bot").set_defaults(f=cmd_discord)
+    sub.add_parser("discord-bot", help="run the Discord bot (chat.provider discord)").set_defaults(f=cmd_discord)
+    sub.add_parser("slack-bot", help="run the Slack bot (chat.provider slack; Socket Mode or Events API)").set_defaults(f=cmd_slack)
+    s = sub.add_parser("alert", help="open an alert for the orchestrator (from a monitor or a cron job)")
+    s.add_argument("text")
+    s.set_defaults(f=cmd_alert)
+    s = sub.add_parser("daily-note", help="write the day's note to the knowledge provider (or --print it)")
+    s.add_argument("day", nargs="?", help="YYYY-MM-DD (default today)")
+    s.add_argument("--print", action="store_true")
+    s.set_defaults(f=cmd_daily_note)
+    s = sub.add_parser("eval", help="run the prompt eval (--root <checkout> [--base <checkout>]; see evals.py)")
+    s.add_argument("rest", nargs=argparse.REMAINDER)
+    s.set_defaults(f=cmd_eval)
+    s = sub.add_parser("eval-case", help=argparse.SUPPRESS)
+    s.add_argument("--case", required=True)
+    s.add_argument("--max-turns", type=int, default=25)
+    s.set_defaults(f=cmd_eval_case)
+    sub.add_parser("backup", help="copy the mailbox to <data>/backups now").set_defaults(f=cmd_backup)
     sub.add_parser("mailer", help="run the optional mailer").set_defaults(f=cmd_mailer)
     a = p.parse_args(argv)
     try:

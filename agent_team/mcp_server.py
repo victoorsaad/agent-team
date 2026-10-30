@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from . import config, store
+from . import config, knowledge, notify, store
 
 CURRENT = None   # the conversation this run is handling (set by inbox): what the agent sends stays in it
 ME = None
@@ -17,7 +17,7 @@ ME = None
 
 def tools():
     t = config.team()
-    members = t.members
+    members = t.members + [k for k in t.stand_ins if k not in t.members]
     files = {"type": "array", "items": {"type": "string"}, "maxItems": 10,
              "description": "Files to send with it (absolute paths: a report, CSV, screenshot, PDF), up to 10 MB each."}
     about = {"type": "integer", "description": "Rarely needed: what you send already stays in the conversation you're "
@@ -70,6 +70,19 @@ def tools():
          "inputSchema": {"type": "object", "required": ["id", "why"], "properties": {"id": {"type": "integer"}, "why": {"type": "string", "maxLength": 1000}}}},
         {"name": "teammates", "description": "Who is on the team and what each one does.", "inputSchema": {"type": "object", "properties": {}}},
     ]
+    if t.north and (ME == (t.north.get("agent") or t.orchestrator) or t.is_human(ME)):
+        out.append({"name": "set_north", "description": "The team's north for the week: 1 to 3 measurable goals, each with its number and date (\"10 conversations with prospects by Friday\"). Every run gets it in its instructions, and work the team starts on its own must serve one of them. Replaces the current one.",
+                    "inputSchema": {"type": "object", "required": ["goals", "why"], "properties": {
+                        "goals": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "maxLength": 200}},
+                        "why": {"type": "string", "maxLength": 400, "description": "Where it comes from: last week's numbers, a human's decision, the plan."},
+                        "until": {"type": "string", "description": "YYYY-MM-DD; default next Monday"}}}})
+    if knowledge.enabled():
+        out += [
+            {"name": "notes_search", "description": "Search the humans' notes (goals, product, how the business works, past decisions) before asking them something. Returns note references and a line of context.",
+             "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "maxLength": 200}}}},
+            {"name": "notes_read", "description": "Read one of the humans' notes (a reference from notes_search, or a name).",
+             "inputSchema": {"type": "object", "required": ["ref"], "properties": {"ref": {"type": "string", "maxLength": 300}}}},
+        ]
     if may_decide(ME):
         out.append({"name": "decide", "description": ("Record a human's answer to a pending decision (ids in your inbox, \"Waiting for a human\"). "
                     "Only after a human said it in that conversation; you never decide a decision yourself. Emails aren't decisions: the human's own message approves them."
@@ -175,6 +188,12 @@ def call(name, a):
         c.execute("UPDATE messages SET status = 'done' WHERE id = ?", (a["message_id"],))
         if m["sender"] == ME:
             return "That message is yours; nothing sent."
+        if m["sender"] == "system" and store.alert_thread(c, m["thread"] or a["message_id"]):
+            # an alert from a monitor: its chat thread waits for the answer
+            short_enough(a["answer"])
+            guard_promise(c, a["answer"])
+            return "Sent to the humans in the alert's thread as #%d." % store.send(
+                c, ME, t.primary_human, "update", a["answer"], thread=m["thread"] or a["message_id"], files=files)
         if m["sender"] == "system":
             return "Marked done. It was an automatic task: use post_update for the log, or share if the humans should know."
         if t.is_human(m["sender"]) and not t.is_human(ME):
@@ -212,7 +231,7 @@ def call(name, a):
         dec, mails = store.pending(c, CURRENT) if CURRENT else ([], [])
         if not t.digest or a.get("urgent") or ME == t.orchestrator or t.is_human(ME) or dec or mails:
             # now: no digest, can't wait, or context for what the humans must decide in this conversation
-            store.send(c, ME, t.primary_human, "update", a["text"], thread=CURRENT, files=files)
+            store.send(c, ME, t.primary_human, "update", a["text"], thread=CURRENT, files=files, urgent=bool(a.get("urgent")))
             return "Shared with the humans."
         c.execute("INSERT INTO messages (thread, sender, recipient, kind, body, status, created_at) VALUES (?, ?, ?, 'share', ?, 'done', ?)",
                   (CURRENT, ME, t.orchestrator, a["text"] + store.attached(files), time.time()))
@@ -273,6 +292,7 @@ def call(name, a):
         if info["state"] != "OPEN":
             return "PR #%d is %s; nothing to do." % (a["pr"], info["state"].lower())
         store.state(c, "verdict:%d" % a["pr"], json.dumps({"head": info["headRefOid"], "verdict": a["verdict"], "thread": CURRENT, "at": time.time()}))
+        store.state(c, "lastverdict:%d" % a["pr"], a["verdict"])   # review rounds (dispatcher.review_round)
         if a["verdict"] == "ok" and a.get("needs_human"):
             if not a.get("what"):
                 raise ValueError("needs_human: write `what` (two lines on what changes).")
@@ -290,7 +310,7 @@ def call(name, a):
                         (ME, CURRENT, to, a["subject"].strip(), a["body"].strip(), (a.get("campaign") or "").strip() or None, code, time.time())).lastrowid
         text = ("Email to approve (no. %d, code %s)\nTo: %s\nSubject: %s\n\n%s\n\nApprove with `agent-team approve %d`%s."
                 % (oid, code, to, a["subject"].strip(), a["body"].strip(), oid,
-                   " or answer \"approve\" in this chat thread" if config.flag("TEAM_DISCORD_ENABLED") else ""))
+                   " or answer \"approve\" in this chat thread" if notify.enabled() else ""))
         mid = store.send(c, ME, t.approvers()[0], "approval", text, thread=CURRENT)
         if CURRENT is None:
             c.execute("UPDATE outbox SET thread = ? WHERE id = ?", (mid, oid))
@@ -306,8 +326,23 @@ def call(name, a):
             return "Not needed: every PR comes back to you when its CI finishes, and the gate merges after your review. Finish your run."
         store.state(c, "prwatch:%d:%s" % (a["pr"], ME), json.dumps({"thread": CURRENT, "then": a["then"], "at": time.time()}))
         return "Watching PR #%d. Finish your run now (post_update first); you'll be woken here when its checks are done." % a["pr"]
+    if name == "set_north" and t.north and (ME == (t.north.get("agent") or t.orchestrator) or t.is_human(ME)):
+        goals = [g.strip() for g in a["goals"] if g.strip()][:3]
+        if not goals:
+            raise ValueError("At least one goal, with its number and date.")
+        until = a.get("until") or time.strftime("%Y-%m-%d", time.localtime(time.time() + (7 - time.localtime().tm_wday) * 86400))
+        store.state(c, "north", json.dumps({"goals": goals, "why": a["why"], "until": until, "by": ME, "at": time.time()}, ensure_ascii=False))
+        store.did(c, ME, "North of the week: " + " · ".join(goals), proof=a["why"][:300], thread=CURRENT)
+        return "North saved until %s. Every run sees it from now on." % until
+    if name == "notes_search" and knowledge.enabled():
+        hits = knowledge.search(a["query"])
+        return "\n".join("%s · %s" % (h["ref"], h["line"]) for h in hits) or "Nothing found."
+    if name == "notes_read" and knowledge.enabled():
+        title, text = knowledge.read(a["ref"])
+        return "# %s\n%s" % (title, text[:30000])
     if name == "teammates":
-        return "\n".join("%s: %s%s" % (m, t.summary(m), " (human)" if t.is_human(m) else "") for m in t.members)
+        return "\n".join("%s: %s%s" % (m, t.summary(m), " (human)" if t.is_human(m) else "") for m in t.members) + "".join(
+            "\n%s: not on this team; messages to it go to %s" % (k, v) for k, v in t.stand_ins.items())
     raise ValueError("Unknown tool %s" % name)
 
 
@@ -319,7 +354,7 @@ def handle(msg):
     t = config.team()
     if method == "initialize":
         res = {"protocolVersion": params.get("protocolVersion", "2025-06-18"), "capabilities": {"tools": {}},
-               "serverInfo": {"name": "team", "version": "0.1.0"},
+               "serverInfo": {"name": "team", "version": "0.3.0"},
                "instructions": "You are '%s' on the %s team. Teammates: %s. Ask and assign through these tools; never wait "
                                "for an answer, you are woken up when it arrives." % (ME, t.name, ", ".join(t.members))}
     elif method == "tools/list":

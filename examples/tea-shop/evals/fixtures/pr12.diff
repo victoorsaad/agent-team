@@ -1,0 +1,7 @@
+diff --git a/src/lib/pricing.ts b/src/lib/pricing.ts
+--- a/src/lib/pricing.ts
++++ b/src/lib/pricing.ts
+@@ -10,7 +10,7 @@ export function bundlePrice(items: Item[]) {
+-  return sum(items) * 0.9
++  return sum(items) * 0.75
+ }
